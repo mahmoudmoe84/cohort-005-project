@@ -17,5 +17,4 @@ This follows Coursera for Teams and Udacity: only the buyer can ask, the whole o
 
 ## Consequences
 
-- The Team Refund Policy states this rule publicly, next to the Individual Refund Policy. It amends [ADR-0004](0004-refund-policy-states-only-four-limits.md), which had kept it private: team buyers need it before handing out any seat.
-- The team admin sends the refund request from the team page, beside the team seats, because they are not enrolled and never see the course page's refund box.
+- The Team Refund Policy states this rule publicly ([ADR-0006](0006-public-refund-policies-state-only-their-limits.md)): team buyers need it before handing out any seat.

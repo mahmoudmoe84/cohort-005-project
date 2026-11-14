@@ -5,7 +5,7 @@ import {
 } from "~/lib/refund-requests";
 
 // The public Refund Policy. It states only four limits, on purpose: do not add
-// the finer rules here (docs/adr/0004).
+// the finer rules here (docs/adr/0006).
 
 export function meta() {
   return [

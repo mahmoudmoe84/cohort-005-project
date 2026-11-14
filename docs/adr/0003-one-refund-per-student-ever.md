@@ -15,4 +15,3 @@ A student gets at most one refund across all of Cadence (only approved refund re
 ## Consequences
 
 - This is a public promise in the Refund Policy. Loosening it later is easy, but tightening it would break what students were told.
-- After a refund, the course page shows the normal Buy button with one quiet line saying when the student was refunded. The "Request a refund" box never appears again for that student, on any course.

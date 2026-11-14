@@ -25,4 +25,4 @@ These scenarios settled it:
 ## Consequences
 
 - The admin card shows both columns, "when requested" and "now", so the admin can see what changed while the request waited.
-- The Refund Policy does not mention that watching after asking counts ([ADR-0004](0004-refund-policy-states-only-four-limits.md)).
+- The Individual Refund Policy does not mention that watching after asking counts ([ADR-0006](0006-public-refund-policies-state-only-their-limits.md)).

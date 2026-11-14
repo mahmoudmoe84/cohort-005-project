@@ -15,4 +15,3 @@ An admin approves every refund request whose purchase is eligible ([ADR-0001](00
 
 - **Declined is final.** An admin declines only an ineligible purchase. Time watched and lessons completed only ever go up, and the refund window only closes, so a declined purchase can never become eligible again. The student cannot send another refund request for it.
 - Do not "fix" the verdict by wiring it to the buttons. Leaving them enabled is deliberate.
-- Refunding outside this process (for example, to calm a student complaining publicly) is parked. When it is picked up it will need its own ADR, because it breaks this one and the glossary's rule that a refund request is the only way a purchase is undone.
