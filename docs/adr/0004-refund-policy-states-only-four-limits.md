@@ -4,7 +4,9 @@ status: accepted
 
 # The Refund Policy states only four limits
 
-The public Refund Policy says only four things: refunds are available for 15 days counting the purchase day, with under 2 hours watched, under half the lessons completed, and one refund per student. It deliberately leaves out the finer rules: claimed team seats cannot be refunded, watching after asking still counts ([ADR-0001](0001-refund-eligibility-judged-at-two-moments.md)), and progress is kept after a refund ([ADR-0003](0003-one-refund-per-student-ever.md)). Spelling out every edge teaches people how to game the rules, and once detail is published it cannot be taken back. It also says nothing about how admins review refund requests.
+> Amended by [ADR-0005](0005-claimed-team-seat-blocks-whole-team-purchase-refund.md): this is now the Individual Refund Policy, and the team purchase rule is stated publicly in the Team Refund Policy.
+
+The public Refund Policy says only four things: refunds are available for 15 days counting the purchase day, with under 2 hours watched, under half the lessons completed, and one refund per student. It deliberately leaves out the finer rules: watching after asking still counts ([ADR-0001](0001-refund-eligibility-judged-at-two-moments.md)), and progress is kept after a refund ([ADR-0003](0003-one-refund-per-student-ever.md)). Spelling out every edge teaches people how to game the rules, and once detail is published it cannot be taken back. It also says nothing about how admins review refund requests.
 
 ## Considered Options
 

@@ -1,6 +1,6 @@
 # Cadence
 
-A course platform where students buy courses and watch their lessons. This glossary fixes the words for the parts of the business that students see and that the team talks about.
+A course platform where students buy courses and watch their lessons.
 
 ## Language
 
@@ -8,46 +8,61 @@ A course platform where students buy courses and watch their lessons. This gloss
 
 **Student**:
 A person who buys courses and watches their lessons.
-_Avoid_: Learner, customer, user
+_Avoid_: User, learner, customer
 
-**Admin**:
+**Platform Admin**:
 A person on the Cadence team who runs the platform, including reviewing refund requests.
-_Avoid_: Staff, support, operator
+_Avoid_: Admin, staff
+
+**Team Admin**:
+The person who bought a team purchase and hands out its team seats.
+_Avoid_: Admin, team owner
+
+### Teams
+
+**Team Purchase**:
+One purchase of a course for several people, paid for by a team admin.
+_Avoid_: Team plan, bulk purchase
+
+**Team Seat**:
+One person's place on a team purchase; a team purchase has as many team seats as were bought, and a team seat is claimed when a student redeems it.
+_Avoid_: Coupon
 
 ### Refunds
 
 **Refund Request**:
-A student's written request for a refund on one purchase. An admin checks it by hand and approves it if the purchase is still eligible, whatever reason the student gave. It is the only way a purchase is undone.
-_Avoid_: Cancellation, Reversal, Chargeback, claim
+A written request for a refund on one purchase, sent by the student who bought it or, for a team purchase, by its team admin. It is the only way a purchase is undone.
 
 **Refund**:
-The money given back to a student once their refund request is approved; it is always what the student actually paid, and the student loses access to the course, though their progress is kept. They may buy the course again. A student gets at most one refund, ever, across all courses.
-_Avoid_: Cancellation, Reversal, Chargeback, money back
+The money given back when a refund request is approved: always what was actually paid.
+_Avoid_: Refunded
 
 **Refund Window**:
-The purchase day plus the fourteen calendar days after it, during which a student can send a refund request.
-_Avoid_: Cancel window, cooling-off period, grace period
+The days after a purchase during which a refund request can be sent.
 
 **Refund Eligibility**:
-Whether a purchase can get a refund. Like a warranty that runs out on years or mileage, it ends as soon as any one limit is reached: the refund window has passed, the student has watched two hours of the course, or the student has completed half of its lessons. The refund window is judged on the day the refund request is sent; time watched and lessons completed are judged again when an admin decides, so watching after asking counts. A claimed team seat is never eligible, a student who has already had a refund is never eligible again, and only one refund request can be in the requested status at a time.
-_Avoid_: Cancellation offer, refund conditions
+Whether a purchase can still get a refund. It ends as soon as any one of its limits is reached, and individual purchases and team purchases have different limits.
 
-**Refund Policy**:
-The public explanation of refund eligibility that anyone can read before buying. It covers what a student can expect, not how admins review.
-_Avoid_: Refund FAQ, terms, refund rules page
+**Individual Refund Policy**:
+The public explanation of refund eligibility for individual purchases that anyone can read before buying.
+_Avoid_: Refund Policy
+
+**Team Refund Policy**:
+The public explanation of refund eligibility for team purchases that anyone can read before buying.
+_Avoid_: Refund Policy
 
 **Requested**:
-The status of a refund request that has been sent and that no admin has reviewed yet.
-_Avoid_: Pending, open, raised, waiting
+The status of a refund request that has been sent and that no platform admin has reviewed yet.
+_Avoid_: Pending
 
 **Approved**:
-The status of a refund request that an admin accepted, meaning the refund has been sent back to the student. It is the last step and cannot be undone.
-_Avoid_: Accepted, granted, completed, refunded, paid out
+The status of a refund request that a platform admin accepted, meaning the refund has been sent back. It cannot be undone.
+_Avoid_: Accepted
 
 **Declined**:
-The status of a refund request that an admin turned down because the purchase was not eligible: no refund is given and the student keeps access. It is final; the student cannot send another refund request for that purchase.
-_Avoid_: Rejected, denied, refused
+The status of a refund request that a platform admin turned down because the purchase was not eligible.
+_Avoid_: Rejected, denied
 
 **Decided**:
 A refund request that is either approved or declined.
-_Avoid_: Closed, resolved, processed, history
+_Avoid_: Closed
