@@ -1,0 +1,2 @@
+ALTER TABLE `refund_requests` ADD `seconds_watched_at_request` real DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE `refund_requests` ADD `completed_lesson_count_at_request` integer DEFAULT 0 NOT NULL;

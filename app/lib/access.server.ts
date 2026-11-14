@@ -30,7 +30,7 @@ function findEnrollment(userId: number, courseId: number) {
     .get();
 }
 
-function isUserEnrolled(userId: number, courseId: number) {
+export function isUserEnrolled(userId: number, courseId: number) {
   return !!findEnrollment(userId, courseId);
 }
 

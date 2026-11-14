@@ -296,8 +296,14 @@ export default function Home({ loaderData }: Route.ComponentProps) {
       )}
 
       <footer className="border-t border-border py-8">
-        <div className="mx-auto max-w-6xl px-6 text-center text-sm text-muted-foreground">
-          Cadence
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-x-6 gap-y-2 px-6 text-sm text-muted-foreground">
+          <span>Cadence</span>
+          <Link to="/courses" className="hover:underline">
+            Courses
+          </Link>
+          <Link to="/refund-policy" className="hover:underline">
+            Refund Policy
+          </Link>
         </div>
       </footer>
 
