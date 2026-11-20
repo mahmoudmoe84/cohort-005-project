@@ -360,6 +360,25 @@ async function send(
     .run();
 }
 
+// ─── Never breaking what caused it ───
+
+/**
+ * Runs `work`, and if it throws, logs `failure` with the error and gives
+ * undefined instead. Sending a Notification or marking one read never breaks
+ * the action that caused it or the page being opened.
+ */
+async function logInsteadOfThrowing<T>(
+  failure: string,
+  work: () => Promise<T>
+): Promise<T | undefined> {
+  try {
+    return await work();
+  } catch (error) {
+    console.error(failure, error);
+    return undefined;
+  }
+}
+
 // ─── One function per kind ───
 
 /**
@@ -374,68 +393,66 @@ export async function notifyDiscussionReply(
   discussionReplyId: number,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    const discussionReply = getCommentWithAuthor(db, discussionReplyId);
-    if (!discussionReply || discussionReply.parentId === null) return;
+  await logInsteadOfThrowing(
+    `Couldn't send the Discussion Reply Notification for comment ${discussionReplyId}`,
+    async () => {
+      const discussionReply = getCommentWithAuthor(db, discussionReplyId);
+      if (!discussionReply || discussionReply.parentId === null) return;
 
-    const discussionQuestion = getCommentWithAuthor(
-      db,
-      discussionReply.parentId
-    );
-    const course = getCourse(db, courseId);
-    const lesson = getLesson(db, discussionReply.lessonId);
-    if (!discussionQuestion || !course) return;
+      const discussionQuestion = getCommentWithAuthor(
+        db,
+        discussionReply.parentId
+      );
+      const course = getCourse(db, courseId);
+      const lesson = getLesson(db, discussionReply.lessonId);
+      if (!discussionQuestion || !course) return;
 
-    // The Instructor's own top-level comment isn't a Discussion Question, so a
-    // comment answering it isn't a Discussion Reply.
-    if (discussionQuestion.authorId === course.instructorId) return;
+      // The Instructor's own top-level comment isn't a Discussion Question, so
+      // a comment answering it isn't a Discussion Reply.
+      if (discussionQuestion.authorId === course.instructorId) return;
 
-    // Nobody hears about their own action.
-    if (discussionQuestion.authorId === discussionReply.authorId) return;
+      // Nobody hears about their own action.
+      if (discussionQuestion.authorId === discussionReply.authorId) return;
 
-    await send(
-      db,
-      {
-        kind: "discussion-reply",
-        recipients: [
-          {
-            id: discussionQuestion.authorId,
-            email: discussionQuestion.authorEmail,
+      await send(
+        db,
+        {
+          kind: "discussion-reply",
+          recipients: [
+            {
+              id: discussionQuestion.authorId,
+              email: discussionQuestion.authorEmail,
+            },
+          ],
+          actor: {
+            name: discussionReply.authorName,
+            avatarUrl: discussionReply.authorAvatarUrl,
           },
-        ],
-        actor: {
-          name: discussionReply.authorName,
-          avatarUrl: discussionReply.authorAvatarUrl,
+          content: {
+            summary: discussionReplySummary(
+              discussionReply.authorName,
+              course,
+              lesson
+            ),
+            excerpt: discussionReply.body,
+            context: course.title,
+            url: discussionLink(course, lesson, discussionReply.id),
+            // The author's switch drops the email, and only the email.
+            email: discussionQuestion.authorEmailAndPopUps
+              ? discussionReplyEmail(
+                  discussionQuestion,
+                  discussionReply,
+                  course,
+                  lesson
+                )
+              : undefined,
+          },
         },
-        content: {
-          summary: discussionReplySummary(
-            discussionReply.authorName,
-            course,
-            lesson
-          ),
-          excerpt: discussionReply.body,
-          context: course.title,
-          url: discussionLink(course, lesson, discussionReply.id),
-          // The author's switch drops the email, and only the email.
-          email: discussionQuestion.authorEmailAndPopUps
-            ? discussionReplyEmail(
-                discussionQuestion,
-                discussionReply,
-                course,
-                lesson
-              )
-            : undefined,
-        },
-      },
-      { commentId: discussionReply.id },
-      provider
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't send the Discussion Reply Notification for comment ${discussionReplyId}`,
-      error
-    );
-  }
+        { commentId: discussionReply.id },
+        provider
+      );
+    }
+  );
 }
 
 /**
@@ -450,51 +467,49 @@ export async function notifyDiscussionQuestion(
   discussionQuestionId: number,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    const discussionQuestion = getCommentWithAuthor(db, discussionQuestionId);
-    const course = getCourse(db, courseId);
-    if (!discussionQuestion || !course) return;
+  await logInsteadOfThrowing(
+    `Couldn't send the Discussion Question Notification for comment ${discussionQuestionId}`,
+    async () => {
+      const discussionQuestion = getCommentWithAuthor(db, discussionQuestionId);
+      const course = getCourse(db, courseId);
+      if (!discussionQuestion || !course) return;
 
-    // A comment with a parent answers a Discussion Question instead.
-    if (discussionQuestion.parentId !== null) return;
+      // A comment with a parent answers a Discussion Question instead.
+      if (discussionQuestion.parentId !== null) return;
 
-    // The Instructor's own top-level comment isn't a Discussion Question, and
-    // nobody hears about their own action.
-    if (discussionQuestion.authorId === course.instructorId) return;
+      // The Instructor's own top-level comment isn't a Discussion Question, and
+      // nobody hears about their own action.
+      if (discussionQuestion.authorId === course.instructorId) return;
 
-    const lesson = getLesson(db, discussionQuestion.lessonId);
-    const instructor = getRecipient(db, course.instructorId);
-    if (!instructor) return;
+      const lesson = getLesson(db, discussionQuestion.lessonId);
+      const instructor = getRecipient(db, course.instructorId);
+      if (!instructor) return;
 
-    await send(
-      db,
-      {
-        kind: "discussion-question",
-        recipients: [instructor],
-        actor: {
-          name: discussionQuestion.authorName,
-          avatarUrl: discussionQuestion.authorAvatarUrl,
+      await send(
+        db,
+        {
+          kind: "discussion-question",
+          recipients: [instructor],
+          actor: {
+            name: discussionQuestion.authorName,
+            avatarUrl: discussionQuestion.authorAvatarUrl,
+          },
+          content: {
+            summary: discussionQuestionSummary(
+              discussionQuestion.authorName,
+              course,
+              lesson
+            ),
+            excerpt: discussionQuestion.body,
+            context: course.title,
+            url: discussionLink(course, lesson, discussionQuestion.id),
+          },
         },
-        content: {
-          summary: discussionQuestionSummary(
-            discussionQuestion.authorName,
-            course,
-            lesson
-          ),
-          excerpt: discussionQuestion.body,
-          context: course.title,
-          url: discussionLink(course, lesson, discussionQuestion.id),
-        },
-      },
-      { commentId: discussionQuestion.id },
-      provider
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't send the Discussion Question Notification for comment ${discussionQuestionId}`,
-      error
-    );
-  }
+        { commentId: discussionQuestion.id },
+        provider
+      );
+    }
+  );
 }
 
 /**
@@ -508,48 +523,46 @@ export async function notifyOpenRefundRequest(
   refundRequestId: number,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    const refundRequest = getRefundRequestWithBuyer(db, refundRequestId);
-    if (!refundRequest) return;
+  await logInsteadOfThrowing(
+    `Couldn't send the Open Refund Request Notification for Refund Request ${refundRequestId}`,
+    async () => {
+      const refundRequest = getRefundRequestWithBuyer(db, refundRequestId);
+      if (!refundRequest) return;
 
-    // Nobody hears about their own action, even a Platform Admin who asks for
-    // their own money back.
-    const platformAdmins = getPlatformAdmins(db).filter(
-      (platformAdmin) => platformAdmin.id !== refundRequest.buyerId
-    );
-    if (platformAdmins.length === 0) return;
+      // Nobody hears about their own action, even a Platform Admin who asks for
+      // their own money back.
+      const platformAdmins = getPlatformAdmins(db).filter(
+        (platformAdmin) => platformAdmin.id !== refundRequest.buyerId
+      );
+      if (platformAdmins.length === 0) return;
 
-    await send(
-      db,
-      {
-        kind: "open-refund-request",
-        recipients: platformAdmins,
-        actor: {
-          name: refundRequest.buyerName,
-          avatarUrl: refundRequest.buyerAvatarUrl,
+      await send(
+        db,
+        {
+          kind: "open-refund-request",
+          recipients: platformAdmins,
+          actor: {
+            name: refundRequest.buyerName,
+            avatarUrl: refundRequest.buyerAvatarUrl,
+          },
+          content: {
+            summary: openRefundRequestSummary(
+              refundRequest.buyerName,
+              refundRequest.courseTitle,
+              refundRequest.amountPaid
+            ),
+            excerpt: refundRequest.reason,
+            context: refundRequest.courseTitle,
+            // The review page, which shows Open Refund Requests unless told
+            // otherwise.
+            url: "/admin/refunds",
+          },
         },
-        content: {
-          summary: openRefundRequestSummary(
-            refundRequest.buyerName,
-            refundRequest.courseTitle,
-            refundRequest.amountPaid
-          ),
-          excerpt: refundRequest.reason,
-          context: refundRequest.courseTitle,
-          // The review page, which shows Open Refund Requests unless told
-          // otherwise.
-          url: "/admin/refunds",
-        },
-      },
-      { refundRequestId: refundRequest.id },
-      provider
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't send the Open Refund Request Notification for Refund Request ${refundRequestId}`,
-      error
-    );
-  }
+        { refundRequestId: refundRequest.id },
+        provider
+      );
+    }
+  );
 }
 
 /**
@@ -563,44 +576,42 @@ export async function notifySeatClaimed(
   seatId: number,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    const seat = getClaimedSeat(db, seatId);
-    if (!seat) return;
+  await logInsteadOfThrowing(
+    `Couldn't send the Seat claimed Notification for Seat ${seatId}`,
+    async () => {
+      const seat = getClaimedSeat(db, seatId);
+      if (!seat) return;
 
-    // Nobody hears about their own action, so a Team Admin who claims one of
-    // their own Seats isn't told.
-    if (seat.studentId === seat.teamAdminId) return;
+      // Nobody hears about their own action, so a Team Admin who claims one of
+      // their own Seats isn't told.
+      if (seat.studentId === seat.teamAdminId) return;
 
-    const teamAdmin = getRecipient(db, seat.teamAdminId);
-    if (!teamAdmin) return;
+      const teamAdmin = getRecipient(db, seat.teamAdminId);
+      if (!teamAdmin) return;
 
-    await send(
-      db,
-      {
-        kind: "seat-claimed",
-        recipients: [teamAdmin],
-        actor: { name: seat.studentName, avatarUrl: seat.studentAvatarUrl },
-        content: {
-          summary: seatClaimedSummary(
-            seat.studentName,
-            seat.courseTitle,
-            countSeats(db, seat.teamLicenceId)
-          ),
-          excerpt: null,
-          context: seat.courseTitle,
-          url: "/team",
+      await send(
+        db,
+        {
+          kind: "seat-claimed",
+          recipients: [teamAdmin],
+          actor: { name: seat.studentName, avatarUrl: seat.studentAvatarUrl },
+          content: {
+            summary: seatClaimedSummary(
+              seat.studentName,
+              seat.courseTitle,
+              countSeats(db, seat.teamLicenceId)
+            ),
+            excerpt: null,
+            context: seat.courseTitle,
+            url: "/team",
+          },
         },
-      },
-      // About the team page as a whole.
-      {},
-      provider
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't send the Seat claimed Notification for Seat ${seatId}`,
-      error
-    );
-  }
+        // About the team page as a whole.
+        {},
+        provider
+      );
+    }
+  );
 }
 
 /**
@@ -614,41 +625,39 @@ export async function notifyRefundRequestDecided(
   refundRequestId: number,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    const refundRequest = getRefundRequestWithBuyer(db, refundRequestId);
-    if (!refundRequest || refundRequest.status === RefundStatus.Open) return;
+  await logInsteadOfThrowing(
+    `Couldn't send the Refund Request decided Notification for Refund Request ${refundRequestId}`,
+    async () => {
+      const refundRequest = getRefundRequestWithBuyer(db, refundRequestId);
+      if (!refundRequest || refundRequest.status === RefundStatus.Open) return;
 
-    // Nobody hears about their own action, even a Platform Admin who decides
-    // their own Refund Request.
-    if (refundRequest.decidedById === refundRequest.buyerId) return;
+      // Nobody hears about their own action, even a Platform Admin who decides
+      // their own Refund Request.
+      if (refundRequest.decidedById === refundRequest.buyerId) return;
 
-    await send(
-      db,
-      {
-        kind: "refund-request-decided",
-        recipients: [
-          { id: refundRequest.buyerId, email: refundRequest.buyerEmail },
-        ],
-        actor: null,
-        content: {
-          summary: refundRequestDecidedSummary(refundRequest),
-          excerpt: refundRequest.decisionNote,
-          context: refundRequest.courseTitle,
-          url: REFUND_REQUESTS_URL,
-          // Always, whatever the buyer's switch says: it carries the money
-          // details.
-          email: refundRequestDecidedEmail(refundRequest),
+      await send(
+        db,
+        {
+          kind: "refund-request-decided",
+          recipients: [
+            { id: refundRequest.buyerId, email: refundRequest.buyerEmail },
+          ],
+          actor: null,
+          content: {
+            summary: refundRequestDecidedSummary(refundRequest),
+            excerpt: refundRequest.decisionNote,
+            context: refundRequest.courseTitle,
+            url: REFUND_REQUESTS_URL,
+            // Always, whatever the buyer's switch says: it carries the money
+            // details.
+            email: refundRequestDecidedEmail(refundRequest),
+          },
         },
-      },
-      { refundRequestId: refundRequest.id },
-      provider
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't send the Refund Request decided Notification for Refund Request ${refundRequestId}`,
-      error
-    );
-  }
+        { refundRequestId: refundRequest.id },
+        provider
+      );
+    }
+  );
 }
 
 // ─── Connecting to the Notification Feed ───
@@ -663,17 +672,11 @@ export async function notificationFeedCredentials(
   userId: number,
   provider?: NotificationProvider
 ): Promise<FeedCredentials | null> {
-  try {
-    return await (provider ?? configuredNotificationProvider()).feedCredentials(
-      userId
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't get the Notification Feed credentials for user ${userId}`,
-      error
-    );
-    return null;
-  }
+  const credentials = await logInsteadOfThrowing(
+    `Couldn't get the Notification Feed credentials for user ${userId}`,
+    () => (provider ?? configuredNotificationProvider()).feedCredentials(userId)
+  );
+  return credentials ?? null;
 }
 
 // ─── Marking read ───
@@ -741,16 +744,14 @@ export async function markNotificationsRead(
   page: LinkedPage,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    for (const sent of findNotificationsToMark(db, userId, page)) {
-      await markOneRead(db, sent, userId, provider);
+  await logInsteadOfThrowing(
+    `Couldn't mark the Notifications on the ${page.page} page read for user ${userId}`,
+    async () => {
+      for (const sent of findNotificationsToMark(db, userId, page)) {
+        await markOneRead(db, sent, userId, provider);
+      }
     }
-  } catch (error) {
-    console.error(
-      `Couldn't mark the Notifications on the ${page.page} page read for user ${userId}`,
-      error
-    );
-  }
+  );
 }
 
 // Never throws, so one Notification that can't be marked doesn't stop the
@@ -761,19 +762,17 @@ async function markOneRead(
   userId: number,
   provider: NotificationProvider | undefined
 ): Promise<void> {
-  try {
-    await (provider ?? configuredNotificationProvider()).markRead({
-      workflowRunId: sent.workflowRunId,
-      userId,
-    });
-    db.update(sentNotifications)
-      .set({ markedReadAt: new Date().toISOString() })
-      .where(eq(sentNotifications.id, sent.id))
-      .run();
-  } catch (error) {
-    console.error(
-      `Couldn't mark the Notification from workflow run ${sent.workflowRunId} read for user ${userId}`,
-      error
-    );
-  }
+  await logInsteadOfThrowing(
+    `Couldn't mark the Notification from workflow run ${sent.workflowRunId} read for user ${userId}`,
+    async () => {
+      await (provider ?? configuredNotificationProvider()).markRead({
+        workflowRunId: sent.workflowRunId,
+        userId,
+      });
+      db.update(sentNotifications)
+        .set({ markedReadAt: new Date().toISOString() })
+        .where(eq(sentNotifications.id, sent.id))
+        .run();
+    }
+  );
 }
