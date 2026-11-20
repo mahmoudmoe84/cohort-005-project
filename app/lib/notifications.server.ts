@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
 import {
@@ -696,12 +696,23 @@ export type LinkedPage =
     }
   | { page: "team" };
 
+// Opening a page waits at most this long for the Notification Provider,
+// however many Notifications it marks read. Tries still going after that
+// finish in the background.
+const MARK_READ_WAIT_MS = 1_000;
+
+// Cadence asks the Notification Provider to mark a Notification read at most
+// this many times. Some can never be marked, such as one older than Knock's
+// message log, and those would otherwise be asked about on every visit.
+const MARK_READ_ATTEMPTS = 3;
+
 // The person's own Notifications about what the page shows, and nobody
-// else's, that Cadence hasn't had marked read yet.
+// else's, that Cadence hasn't had marked read yet and hasn't given up on.
 function findNotificationsToMark(db: Db, userId: number, page: LinkedPage) {
   const theirsToMark = and(
     eq(sentNotifications.recipientId, userId),
-    isNull(sentNotifications.markedReadAt)
+    isNull(sentNotifications.markedReadAt),
+    lt(sentNotifications.markReadAttempts, MARK_READ_ATTEMPTS)
   );
   const columns = {
     id: sentNotifications.id,
@@ -750,10 +761,12 @@ function findNotificationsToMark(db: Db, userId: number, page: LinkedPage) {
 
 /**
  * Marks the signed-in person's Notifications about a page read once they open
- * it, however they got there. Call it from the page's loader. The Notification
- * Provider is asked once per Notification. It never throws: a failure is
- * logged, so the page still opens, and what wasn't marked is tried again the
- * next time. The provider defaults to the configured one.
+ * it, however they got there. Call it from the page's loader. It asks the
+ * Notification Provider about them all at once, and waits for it at most a
+ * second, so the page never stalls. A Notification that's marked isn't asked
+ * about again, and one that isn't is tried again the next time, up to three
+ * tries. It never throws: a failure is logged, so the page still opens. The
+ * provider defaults to the configured one.
  */
 export async function markNotificationsRead(
   db: Db,
@@ -764,25 +777,53 @@ export async function markNotificationsRead(
   await logInsteadOfThrowing(
     `Couldn't mark the Notifications on the ${page.page} page read for user ${userId}`,
     async () => {
-      for (const sent of findNotificationsToMark(db, userId, page)) {
-        await markOneRead(db, sent, userId, provider);
-      }
+      const toMark = findNotificationsToMark(db, userId, page);
+      if (toMark.length === 0) return;
+
+      const markingProvider = provider ?? configuredNotificationProvider();
+      countAttempts(db, toMark);
+      const marking = toMark.map((sent) =>
+        markOneRead(db, sent, userId, markingProvider)
+      );
+      await waitAtMost(MARK_READ_WAIT_MS, Promise.all(marking));
     }
   );
 }
 
+// Counted as the tries start, so a try that never finishes counts too.
+function countAttempts(db: Db, toMark: { id: number }[]) {
+  const ids = toMark.map((sent) => sent.id);
+  db.update(sentNotifications)
+    .set({ markReadAttempts: sql`${sentNotifications.markReadAttempts} + 1` })
+    .where(inArray(sentNotifications.id, ids))
+    .run();
+}
+
+// Resolves once the work is done or `ms` have passed, whichever comes first.
+// The work carries on either way.
+function waitAtMost(ms: number, work: Promise<unknown>): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    work.then(done, done);
+  });
+}
+
 // Never throws, so one Notification that can't be marked doesn't stop the
-// rest. It's asked about again the next time.
+// rest. Unless that was its last try, it's asked about again the next time.
 async function markOneRead(
   db: Db,
   sent: { id: number; workflowRunId: string },
   userId: number,
-  provider: NotificationProvider | undefined
+  provider: NotificationProvider
 ): Promise<void> {
   await logInsteadOfThrowing(
     `Couldn't mark the Notification from workflow run ${sent.workflowRunId} read for user ${userId}`,
     async () => {
-      await (provider ?? configuredNotificationProvider()).markRead({
+      await provider.markRead({
         workflowRunId: sent.workflowRunId,
         userId,
       });

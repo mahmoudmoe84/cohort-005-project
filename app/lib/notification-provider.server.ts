@@ -53,8 +53,9 @@ export interface NotificationProvider {
   /**
    * Marks read what that send put in that person's Notification Feed, and
    * nobody else's. Resolves once it's read, including when it already was,
-   * and Cadence doesn't ask about it again. Throws if it can't be marked, and
-   * Cadence asks again the next time the person opens its page.
+   * and Cadence doesn't ask about it again. Throws if it can't be marked.
+   * Cadence then asks again the next time the person opens its page, and
+   * gives up after three tries.
    */
   markRead(mark: NotificationReadMark): Promise<void>;
 }

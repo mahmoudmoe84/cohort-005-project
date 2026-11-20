@@ -126,8 +126,9 @@ Neither has been checked against a live Knock account. What Knock's docs and sou
 
 ## Known limits
 
-- Knock keeps its message log for 30 days on the free plan. Opening a page more than 30 days after its Notification can't mark it read on the server, and Cadence asks again each time that page opens.
-- Knock runs workflows asynchronously. A page opened in the moment after a send can come before the in-app message exists. Cadence then asks again the next time the page opens.
+- Knock keeps its message log for 30 days on the free plan. Opening a page more than 30 days after its Notification can't mark it read on the server. Cadence gives up on it after three tries, so it stays unread in the bell until the person clicks it or marks all as read.
+- Knock runs workflows asynchronously. A page opened in the moment after a send can come before the in-app message exists. Cadence then asks again the next time the page opens, which uses one of the three tries.
+- Opening a page waits for Knock at most a second, however many Notifications it marks read. Marks that take longer finish in the background, and the bell shows them after the next navigation.
 - Knock always sends an HTML part with email, while spec #28 asks for plain text only. Whether a Postmark payload override can drop it isn't known.
 - The user token lasts an hour. Before it runs out, the browser asks `/api/notification-feed-credentials` for a fresh one.
 - Knock's client drops the socket 30 seconds after the tab is hidden. Notifications that arrive meanwhile appear after the next navigation or with the next arrival.

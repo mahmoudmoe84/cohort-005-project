@@ -391,10 +391,14 @@ export const sentNotifications = sqliteTable(
       .notNull()
       .$defaultFn(() => new Date().toISOString()),
     // When Cadence had the Notification Provider mark it read, after its
-    // recipient opened the page it links to. Null until then, so opening the
-    // page again doesn't ask again. It's not the Notification's read state,
-    // which lives at the Notification Provider.
+    // recipient opened the page it links to. Once it's set, opening the page
+    // again doesn't ask again. It's not the Notification's read state, which
+    // lives at the Notification Provider.
     markedReadAt: text("marked_read_at"),
+    // How many times Cadence has asked the Notification Provider to mark it
+    // read, counted as each try starts. Cadence gives up after three, because
+    // some can never be marked (ADR 0013).
+    markReadAttempts: integer("mark_read_attempts").notNull().default(0),
   },
   (table) => [
     index("sent_notifications_recipient_idx").on(table.recipientId, table.kind),
