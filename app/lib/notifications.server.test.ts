@@ -1467,6 +1467,25 @@ describe("markNotificationsRead", () => {
     );
   });
 
+  it("logs a failed lookup and still returns normally, so the page opens", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    db.$client.close();
+
+    await expect(
+      markNotificationsRead(
+        db,
+        liam.id,
+        { page: "team" },
+        createFakeNotificationProvider()
+      )
+    ).resolves.toBeUndefined();
+
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining(`user ${liam.id}`),
+      expect.any(Error)
+    );
+  });
+
   it("asks the Notification Provider once per Notification, however often its page opens", async () => {
     const provider = createFakeNotificationProvider();
     const question = askDiscussionQuestion(

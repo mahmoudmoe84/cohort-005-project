@@ -682,7 +682,7 @@ function findNotificationsToMark(db: Db, userId: number, page: LinkedPage) {
  * Marks the signed-in person's Notifications about a page read once they open
  * it, however they got there. Call it from the page's loader. The Notification
  * Provider is asked once per Notification. It never throws: a failure is
- * logged, so the page still opens, and that Notification is tried again the
+ * logged, so the page still opens, and what wasn't marked is tried again the
  * next time. The provider defaults to the configured one.
  */
 export async function markNotificationsRead(
@@ -691,22 +691,39 @@ export async function markNotificationsRead(
   page: LinkedPage,
   provider?: NotificationProvider
 ): Promise<void> {
-  const toMark = findNotificationsToMark(db, userId, page);
-  for (const { id, workflowRunId } of toMark) {
-    try {
-      await (provider ?? configuredNotificationProvider()).markRead({
-        workflowRunId,
-        userId,
-      });
-      db.update(sentNotifications)
-        .set({ markedReadAt: new Date().toISOString() })
-        .where(eq(sentNotifications.id, id))
-        .run();
-    } catch (error) {
-      console.error(
-        `Couldn't mark the Notification from workflow run ${workflowRunId} read for user ${userId}`,
-        error
-      );
+  try {
+    for (const sent of findNotificationsToMark(db, userId, page)) {
+      await markOneRead(db, sent, userId, provider);
     }
+  } catch (error) {
+    console.error(
+      `Couldn't mark the Notifications on the ${page.page} page read for user ${userId}`,
+      error
+    );
+  }
+}
+
+// Never throws, so one Notification that can't be marked doesn't stop the
+// rest. It's asked about again the next time.
+async function markOneRead(
+  db: Db,
+  sent: { id: number; workflowRunId: string },
+  userId: number,
+  provider: NotificationProvider | undefined
+): Promise<void> {
+  try {
+    await (provider ?? configuredNotificationProvider()).markRead({
+      workflowRunId: sent.workflowRunId,
+      userId,
+    });
+    db.update(sentNotifications)
+      .set({ markedReadAt: new Date().toISOString() })
+      .where(eq(sentNotifications.id, sent.id))
+      .run();
+  } catch (error) {
+    console.error(
+      `Couldn't mark the Notification from workflow run ${sent.workflowRunId} read for user ${userId}`,
+      error
+    );
   }
 }
