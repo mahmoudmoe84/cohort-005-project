@@ -212,7 +212,7 @@ function CommentItem({
 
   if (comment.deleted) {
     return (
-      <div id={anchor} className="py-3">
+      <div id={anchor} className={cn("py-3", isReply && "border-l pl-4")}>
         <p className="text-sm italic text-muted-foreground">
           This comment was deleted.
         </p>
