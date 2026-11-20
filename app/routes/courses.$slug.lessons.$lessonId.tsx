@@ -11,6 +11,7 @@ import {
 } from "~/components/comment-thread";
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from "~/lib/comments";
 import {
+  markNotificationsRead,
   notifyDiscussionQuestion,
   notifyDiscussionReply,
 } from "~/lib/notifications.server";
@@ -776,6 +777,16 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   const comments = canViewContent
     ? await renderThread(getLessonThread(lessonId))
     : [];
+
+  // With the discussion in front of them, the person's Discussion Question
+  // and Discussion Reply Notifications on this lesson are read, however they
+  // got here. This never throws.
+  if (currentUserId && canViewContent) {
+    await markNotificationsRead(db, currentUserId, {
+      page: "lesson",
+      lessonId,
+    });
+  }
 
   // Render lesson content from Markdown to HTML server-side
   const contentHtml = lesson.content

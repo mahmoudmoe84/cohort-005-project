@@ -21,7 +21,10 @@ import {
   type RefundRequestForReview,
 } from "~/lib/refunds.server";
 import { RULE_BREAK_LABELS } from "~/lib/refund-rules";
-import { notifyRefundRequestDecided } from "~/lib/notifications.server";
+import {
+  markNotificationsRead,
+  notifyRefundRequestDecided,
+} from "~/lib/notifications.server";
 
 const refundFilterSchema = z
   .nativeEnum(RefundStatus)
@@ -81,9 +84,15 @@ export function meta() {
 }
 
 export async function loader({ request, url }: Route.LoaderArgs) {
-  await requirePlatformAdmin(request);
+  const platformAdmin = await requirePlatformAdmin(request);
 
   const status = refundFilterSchema.parse(url.searchParams.get("status"));
+
+  // Open Refund Request Notifications link here, so the Platform Admin's are
+  // read, however they got here. This never throws.
+  await markNotificationsRead(db, platformAdmin.id, {
+    page: "refund-request-review",
+  });
 
   return {
     status,

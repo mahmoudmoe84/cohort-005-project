@@ -7,6 +7,7 @@ import {
   uniqueIndex,
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
+import type { NotificationKind } from "../lib/notifications";
 
 export enum UserRole {
   Student = "student",
@@ -364,6 +365,39 @@ export const comments = sqliteTable(
   (table) => [
     index("comments_lesson_idx").on(table.lessonId),
     index("comments_parent_idx").on(table.parentId),
+  ]
+);
+
+// One row for each person each Notification went to. The Notification itself
+// lives at the Notification Provider (ADR 0013). Cadence keeps only what it
+// needs to mark it read once that person opens the page it links to.
+export const sentNotifications = sqliteTable(
+  "sent_notifications",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    recipientId: integer("recipient_id")
+      .notNull()
+      .references(() => users.id),
+    kind: text("kind").notNull().$type<NotificationKind>(),
+    // What the Notification is about. Its kind says which one is set: the
+    // comment for a Discussion Question or Discussion Reply, the Refund Request
+    // for Open Refund Request and Refund Request decided. Seat claimed is about
+    // the team page as a whole, so it has neither.
+    commentId: integer("comment_id").references(() => comments.id),
+    refundRequestId: integer("refund_request_id").references(() => refunds.id),
+    // The Notification Provider's id for the send. markRead takes it.
+    workflowRunId: text("workflow_run_id").notNull(),
+    sentAt: text("sent_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    // When Cadence had the Notification Provider mark it read, after its
+    // recipient opened the page it links to. Null until then, so opening the
+    // page again doesn't ask again. It's not the Notification's read state,
+    // which lives at the Notification Provider.
+    markedReadAt: text("marked_read_at"),
+  },
+  (table) => [
+    index("sent_notifications_recipient_idx").on(table.recipientId, table.kind),
   ]
 );
 

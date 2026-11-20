@@ -9,9 +9,11 @@ import { RefundStatus, UserRole } from "~/db/schema";
 import { outboxTransport } from "~/lib/mailer.server";
 import {
   createFakeNotificationProvider,
+  type FakeNotificationProvider,
   type NotificationProvider,
 } from "./notification-provider.server";
 import {
+  markNotificationsRead,
   notifyDiscussionQuestion,
   notifyDiscussionReply,
   notifyOpenRefundRequest,
@@ -82,6 +84,14 @@ function postDiscussionReply(
   body: string
 ) {
   return postComment(authorId, body, discussionQuestionId);
+}
+
+function addLesson(title: string) {
+  return db
+    .insert(schema.lessons)
+    .values({ moduleId: lesson.moduleId, title, position: 2 })
+    .returning()
+    .get();
 }
 
 // The schema's foreign keys stop a lesson with comments from being deleted, so
@@ -165,6 +175,15 @@ function claimSeat(seatId: number, studentId: number) {
     .run();
 }
 
+// What the person's Notification Feed shows, newest first: each Notification's
+// kind, and whether it's read.
+function readStates(provider: FakeNotificationProvider, userId: number) {
+  return provider
+    .feedOf(userId)
+    .page()
+    .notifications.map(({ kind, readAt }) => ({ kind, read: readAt !== null }));
+}
+
 function failingProvider(failure: Error): NotificationProvider {
   return {
     async send() {
@@ -172,6 +191,22 @@ function failingProvider(failure: Error): NotificationProvider {
     },
     async feedCredentials(userId) {
       return { provider: "fake", userId };
+    },
+    async markRead() {
+      throw failure;
+    },
+  };
+}
+
+// Sends through the fake, but can't mark anything read.
+function failingToMarkRead(
+  provider: FakeNotificationProvider,
+  failure: Error
+): NotificationProvider {
+  return {
+    ...provider,
+    async markRead() {
+      throw failure;
     },
   };
 }
@@ -322,14 +357,6 @@ describe("notifyDiscussionReply", () => {
 
   it("logs a failed send and still returns normally", async () => {
     const failure = new Error("The Notification Provider is down");
-    const failingProvider: NotificationProvider = {
-      async send() {
-        throw failure;
-      },
-      async feedCredentials(userId) {
-        return { provider: "fake", userId };
-      },
-    };
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const question = askDiscussionQuestion(
       liam.id,
@@ -342,7 +369,12 @@ describe("notifyDiscussionReply", () => {
     );
 
     await expect(
-      notifyDiscussionReply(db, base.course.id, reply.id, failingProvider)
+      notifyDiscussionReply(
+        db,
+        base.course.id,
+        reply.id,
+        failingProvider(failure)
+      )
     ).resolves.toBeUndefined();
 
     expect(logged).toHaveBeenCalledWith(
@@ -1189,5 +1221,303 @@ describe("notifyRefundRequestDecided", () => {
         "— The Cadence team"
       );
     });
+  });
+});
+
+describe("markNotificationsRead", () => {
+  it("marks a Discussion Reply Notification read when its recipient opens the lesson", async () => {
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+    const reply = postDiscussionReply(
+      base.instructor.id,
+      question.id,
+      "Most of the time. Unions need no runtime code."
+    );
+    await notifyDiscussionReply(db, base.course.id, reply.id, provider);
+
+    await markNotificationsRead(
+      db,
+      liam.id,
+      { page: "lesson", lessonId: lesson.id },
+      provider
+    );
+
+    expect(readStates(provider, liam.id)).toEqual([
+      { kind: "discussion-reply", read: true },
+    ]);
+  });
+
+  it("marks a Discussion Question Notification read when the Instructor opens the lesson", async () => {
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+    await notifyDiscussionQuestion(db, base.course.id, question.id, provider);
+
+    await markNotificationsRead(
+      db,
+      base.instructor.id,
+      { page: "lesson", lessonId: lesson.id },
+      provider
+    );
+
+    expect(readStates(provider, base.instructor.id)).toEqual([
+      { kind: "discussion-question", read: true },
+    ]);
+  });
+
+  it("asks the Notification Provider about the person's own Notifications only", async () => {
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+    await notifyDiscussionQuestion(db, base.course.id, question.id, provider);
+    const reply = postDiscussionReply(
+      base.instructor.id,
+      question.id,
+      "Most of the time. Unions need no runtime code."
+    );
+    await notifyDiscussionReply(db, base.course.id, reply.id, provider);
+    const [, discussionReply] = provider.sent;
+
+    await markNotificationsRead(
+      db,
+      liam.id,
+      { page: "lesson", lessonId: lesson.id },
+      provider
+    );
+
+    expect(provider.markedRead).toEqual([
+      { workflowRunId: discussionReply.workflowRunId, userId: liam.id },
+    ]);
+  });
+
+  it("leaves Discussion Notifications on other lessons unread", async () => {
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+    const reply = postDiscussionReply(
+      base.instructor.id,
+      question.id,
+      "Most of the time. Unions need no runtime code."
+    );
+    await notifyDiscussionReply(db, base.course.id, reply.id, provider);
+
+    await markNotificationsRead(
+      db,
+      liam.id,
+      { page: "lesson", lessonId: addLesson("Generics").id },
+      provider
+    );
+
+    expect(readStates(provider, liam.id)).toEqual([
+      { kind: "discussion-reply", read: false },
+    ]);
+  });
+
+  // Decided the way the Refund Request review page decides them.
+  function approveAs(platformAdminId: number, refundRequestId: number) {
+    const result = approveRefundRequest(
+      db,
+      refundRequestId,
+      platformAdminId,
+      null,
+      new Date()
+    );
+    if (!result.ok) throw new Error(result.error);
+  }
+
+  it("marks Refund Request decided read when the buyer opens their Refund Requests", async () => {
+    const provider = createFakeNotificationProvider();
+    const alex = addPlatformAdmin("Alex Rivera");
+    const refundRequest = raiseRefundRequest(
+      buyCourse(liam.id, 7900).id,
+      "The pace is too fast for me."
+    );
+    approveAs(alex.id, refundRequest.id);
+    await notifyRefundRequestDecided(db, refundRequest.id, provider);
+
+    await markNotificationsRead(
+      db,
+      liam.id,
+      { page: "refund-requests" },
+      provider
+    );
+
+    expect(readStates(provider, liam.id)).toEqual([
+      { kind: "refund-request-decided", read: true },
+    ]);
+  });
+
+  // One send tells every Platform Admin.
+  it("marks Open Refund Request read for the Platform Admin who opens the review page, and nobody else", async () => {
+    const provider = createFakeNotificationProvider();
+    const alex = addPlatformAdmin("Alex Rivera");
+    const pat = addPlatformAdmin("Pat Admin");
+    const refundRequest = raiseRefundRequest(
+      buyCourse(liam.id, 7900).id,
+      "The pace is too fast for me."
+    );
+    await notifyOpenRefundRequest(db, refundRequest.id, provider);
+
+    await markNotificationsRead(
+      db,
+      alex.id,
+      { page: "refund-request-review" },
+      provider
+    );
+
+    expect({
+      alex: readStates(provider, alex.id),
+      pat: readStates(provider, pat.id),
+    }).toEqual({
+      alex: [{ kind: "open-refund-request", read: true }],
+      pat: [{ kind: "open-refund-request", read: false }],
+    });
+  });
+
+  it("marks Seat claimed read when the Team Admin opens the team page", async () => {
+    const provider = createFakeNotificationProvider();
+    const ava = addStudent("Ava Nakamura");
+    const { seats } = buyTeamLicence(ava.id, 3);
+    claimSeat(seats[0].id, liam.id);
+    await notifySeatClaimed(db, seats[0].id, provider);
+
+    await markNotificationsRead(db, ava.id, { page: "team" }, provider);
+
+    expect(readStates(provider, ava.id)).toEqual([
+      { kind: "seat-claimed", read: true },
+    ]);
+  });
+
+  it.each([
+    { page: "refund-requests", kind: "refund-request-decided" },
+    { page: "refund-request-review", kind: "open-refund-request" },
+    { page: "team", kind: "seat-claimed" },
+  ] as const)(
+    "leaves Notifications that link elsewhere unread on opening $page",
+    async ({ page, kind }) => {
+      const provider = createFakeNotificationProvider();
+      const alex = addPlatformAdmin("Alex Rivera");
+      // A Platform Admin who also buys courses and runs a team.
+      const pat = addPlatformAdmin("Pat Admin");
+      const patsRefundRequest = raiseRefundRequest(
+        buyCourse(pat.id, 7900).id,
+        "I bought it twice by mistake."
+      );
+      approveAs(alex.id, patsRefundRequest.id);
+      await notifyRefundRequestDecided(db, patsRefundRequest.id, provider);
+      const liamsRefundRequest = raiseRefundRequest(
+        buyCourse(liam.id, 7900).id,
+        "The pace is too fast for me."
+      );
+      await notifyOpenRefundRequest(db, liamsRefundRequest.id, provider);
+      const { seats } = buyTeamLicence(pat.id, 3);
+      claimSeat(seats[0].id, liam.id);
+      await notifySeatClaimed(db, seats[0].id, provider);
+
+      await markNotificationsRead(db, pat.id, { page }, provider);
+
+      expect(readStates(provider, pat.id)).toEqual([
+        { kind: "seat-claimed", read: kind === "seat-claimed" },
+        { kind: "open-refund-request", read: kind === "open-refund-request" },
+        {
+          kind: "refund-request-decided",
+          read: kind === "refund-request-decided",
+        },
+      ]);
+    }
+  );
+
+  it("logs a failed markRead and still returns normally, so the page opens", async () => {
+    const failure = new Error("The Notification Provider is down");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+    const reply = postDiscussionReply(
+      base.instructor.id,
+      question.id,
+      "Most of the time. Unions need no runtime code."
+    );
+    await notifyDiscussionReply(db, base.course.id, reply.id, provider);
+    const [discussionReply] = provider.sent;
+
+    await expect(
+      markNotificationsRead(
+        db,
+        liam.id,
+        { page: "lesson", lessonId: lesson.id },
+        failingToMarkRead(provider, failure)
+      )
+    ).resolves.toBeUndefined();
+
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining(discussionReply.workflowRunId),
+      failure
+    );
+  });
+
+  it("asks the Notification Provider once per Notification, however often its page opens", async () => {
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+    const reply = postDiscussionReply(
+      base.instructor.id,
+      question.id,
+      "Most of the time. Unions need no runtime code."
+    );
+    await notifyDiscussionReply(db, base.course.id, reply.id, provider);
+    const [discussionReply] = provider.sent;
+    const lessonPage = { page: "lesson", lessonId: lesson.id } as const;
+
+    await markNotificationsRead(db, liam.id, lessonPage, provider);
+    await markNotificationsRead(db, liam.id, lessonPage, provider);
+
+    expect(provider.markedRead).toEqual([
+      { workflowRunId: discussionReply.workflowRunId, userId: liam.id },
+    ]);
+  });
+
+  it("tries again the next time the page opens when the Notification Provider failed", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+    const reply = postDiscussionReply(
+      base.instructor.id,
+      question.id,
+      "Most of the time. Unions need no runtime code."
+    );
+    await notifyDiscussionReply(db, base.course.id, reply.id, provider);
+    const lessonPage = { page: "lesson", lessonId: lesson.id } as const;
+    await markNotificationsRead(
+      db,
+      liam.id,
+      lessonPage,
+      failingToMarkRead(
+        provider,
+        new Error("The Notification Provider is down")
+      )
+    );
+
+    await markNotificationsRead(db, liam.id, lessonPage, provider);
+
+    expect(readStates(provider, liam.id)).toEqual([
+      { kind: "discussion-reply", read: true },
+    ]);
   });
 });
