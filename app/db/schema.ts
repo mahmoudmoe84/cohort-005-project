@@ -51,6 +51,13 @@ export const users = sqliteTable("users", {
   role: text("role").notNull().$type<UserRole>(),
   avatarUrl: text("avatar_url"),
   bio: text("bio"),
+  // The switch on Notification settings, "Email and pop-ups for
+  // Notifications". Off, Notifications still collect in the Notification Feed
+  // but aren't emailed or popped up, except Refund Request decided (ADR 0013).
+  // The Notification Provider never sees it.
+  emailAndPopUps: integer("email_and_pop_ups", { mode: "boolean" })
+    .notNull()
+    .default(true),
   createdAt: text("created_at")
     .notNull()
     .$defaultFn(() => new Date().toISOString()),

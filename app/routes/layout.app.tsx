@@ -211,6 +211,8 @@ export async function loader({ request }: Route.LoaderArgs) {
           name: currentUser.name,
           role: currentUser.role,
           avatarUrl: currentUser.avatarUrl ?? null,
+          // The switch on Notification settings, for the Notification Feed.
+          emailAndPopUps: currentUser.emailAndPopUps,
         }
       : null,
     recentCourses,
@@ -250,7 +252,7 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
               key={currentUser.id}
               credentials={feedCredentials}
             >
-              <NotificationBell />
+              <NotificationBell emailAndPopUps={currentUser.emailAndPopUps} />
             </NotificationFeedProvider>
           )
         }

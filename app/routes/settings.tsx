@@ -17,6 +17,7 @@ import { db } from "~/db";
 import { eq } from "drizzle-orm";
 import { formatPrice } from "~/lib/utils";
 import { listRefundRequestsForBuyer } from "~/lib/refunds.server";
+import { NOTIFICATION_SETTINGS_URL } from "~/lib/notifications";
 
 const settingsSchema = z.object({
   name: z.string().trim().min(1, "Name cannot be empty."),
@@ -129,7 +130,15 @@ export default function Settings({ loaderData }: Route.ComponentProps) {
       <div className="mb-8">
         <h1 className="text-3xl font-bold">Settings</h1>
         <p className="mt-1 text-muted-foreground">
-          Update your profile details
+          Update your profile details. Email and pop-ups for Notifications are
+          in{" "}
+          <Link
+            to={NOTIFICATION_SETTINGS_URL}
+            className="font-medium text-foreground underline-offset-4 hover:underline"
+          >
+            Notification settings
+          </Link>
+          .
         </p>
       </div>
 

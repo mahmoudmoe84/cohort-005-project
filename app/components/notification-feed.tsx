@@ -8,17 +8,18 @@ import {
 } from "react";
 import { Link } from "react-router";
 import { Popover } from "radix-ui";
-import { Bell } from "lucide-react";
+import { Bell, Settings } from "lucide-react";
 import { UserAvatar } from "~/components/user-avatar";
 import {
   connectNotificationFeed,
   type NotificationFeedClient,
 } from "~/lib/notification-feed-client";
-import type {
-  FeedCredentials,
-  Notification,
-  NotificationActor,
-  SummaryPart,
+import {
+  NOTIFICATION_SETTINGS_URL,
+  type FeedCredentials,
+  type Notification,
+  type NotificationActor,
+  type SummaryPart,
 } from "~/lib/notifications";
 import { cn, formatRelativeTime } from "~/lib/utils";
 
@@ -132,10 +133,16 @@ function useNotificationFeed(): NotificationFeed {
   return feed;
 }
 
-export function NotificationBell() {
+export function NotificationBell({
+  emailAndPopUps,
+}: {
+  /** The person's switch on Notification settings. */
+  emailAndPopUps: boolean;
+}) {
   const feed = useNotificationFeed();
   const [open, setOpen] = useState(false);
   const { unreadCount } = feed;
+  const close = () => setOpen(false);
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
@@ -167,6 +174,7 @@ export function NotificationBell() {
           <h2 className="border-b px-4 py-3 text-sm font-semibold">
             Notifications
           </h2>
+          {!emailAndPopUps && <EmailAndPopUpsOffLine onNavigate={close} />}
           <div className="flex-1 overflow-y-auto">
             {feed.notifications.length === 0 ? (
               <p className="px-4 py-12 text-center text-sm text-muted-foreground">
@@ -185,9 +193,36 @@ export function NotificationBell() {
               ))
             )}
           </div>
+          <div className="flex items-center border-t px-4 py-2 text-xs text-muted-foreground">
+            <Link
+              to={NOTIFICATION_SETTINGS_URL}
+              onClick={close}
+              className="flex items-center gap-1 hover:text-foreground"
+            >
+              <Settings className="size-3" />
+              Notification settings
+            </Link>
+          </div>
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+// With the switch off, Notifications still arrive here but aren't emailed or
+// popped up, so the Notification Feed says why.
+function EmailAndPopUpsOffLine({ onNavigate }: { onNavigate: () => void }) {
+  return (
+    <p className="m-3 mb-0 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+      Email and pop-ups are off. Notifications still collect here.{" "}
+      <Link
+        to={NOTIFICATION_SETTINGS_URL}
+        onClick={onNavigate}
+        className="font-medium underline"
+      >
+        Change
+      </Link>
+    </p>
   );
 }
 

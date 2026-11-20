@@ -111,6 +111,8 @@ async function seed() {
   // student out of a list does it by email, never by array position — see
   // studentByEmail — so appending or inserting students never silently
   // re-points a coupon redemption at someone else.
+  //
+  // Everyone has email and pop-ups for Notifications on, as a new person does.
 
   const [admin] = db
     .insert(schema.users)
@@ -118,6 +120,7 @@ async function seed() {
       name: "Alex Rivera",
       email: "alex.rivera@ralph.dev",
       role: UserRole.Admin,
+      emailAndPopUps: true,
       avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=alex",
       createdAt: daysAgo(120),
     })
@@ -130,6 +133,7 @@ async function seed() {
       name: "Sarah Chen",
       email: "sarah.chen@ralph.dev",
       role: UserRole.Instructor,
+      emailAndPopUps: true,
       avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=sarah",
       bio: "Senior TypeScript engineer with 10 years of experience building large-scale web applications. Previously at Stripe and Vercel. Passionate about type safety and developer tooling.",
       createdAt: daysAgo(100),
@@ -143,6 +147,7 @@ async function seed() {
       name: "Marcus Johnson",
       email: "marcus.johnson@ralph.dev",
       role: UserRole.Instructor,
+      emailAndPopUps: true,
       avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=marcus",
       bio: "Full-stack developer and API architect specializing in Node.js and cloud infrastructure. Has built and scaled APIs serving millions of requests daily. Conference speaker and open-source contributor.",
       createdAt: daysAgo(95),
@@ -158,6 +163,7 @@ async function seed() {
       name: "Priya Nair",
       email: "priya.nair@ralph.dev",
       role: UserRole.Instructor,
+      emailAndPopUps: true,
       avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=priya",
       bio: "Accessibility engineer and design-systems consultant. Joined to teach, has not published a course yet.",
       createdAt: daysAgo(210),
@@ -172,6 +178,7 @@ async function seed() {
         name: "Emma Wilson",
         email: "emma.wilson@student.dev",
         role: UserRole.Student,
+        emailAndPopUps: true,
         avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=emma",
         createdAt: daysAgo(60),
       },
@@ -179,6 +186,7 @@ async function seed() {
         name: "James Park",
         email: "james.park@student.dev",
         role: UserRole.Student,
+        emailAndPopUps: true,
         avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=james",
         createdAt: daysAgo(55),
       },
@@ -186,6 +194,7 @@ async function seed() {
         name: "Olivia Martinez",
         email: "olivia.martinez@student.dev",
         role: UserRole.Student,
+        emailAndPopUps: true,
         avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=olivia",
         createdAt: daysAgo(45),
       },
@@ -193,6 +202,7 @@ async function seed() {
         name: "Liam Thompson",
         email: "liam@example.com",
         role: UserRole.Student,
+        emailAndPopUps: true,
         avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=liam",
         createdAt: daysAgo(30),
       },
@@ -200,6 +210,7 @@ async function seed() {
         name: "Sophia Davis",
         email: "sophia.davis@student.dev",
         role: UserRole.Student,
+        emailAndPopUps: true,
         avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=sophia",
         createdAt: daysAgo(20),
       },
@@ -213,6 +224,7 @@ async function seed() {
       name: "Bossy McBossface",
       email: "bossy.mcbossface@student.dev",
       role: UserRole.Student,
+      emailAndPopUps: true,
       avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=bossy",
       createdAt: daysAgo(40),
     })
@@ -242,6 +254,7 @@ async function seed() {
         // Matches the named students above: first.last@student.dev.
         email: `${slugify(name).replace(/-/g, ".")}@student.dev`,
         role: UserRole.Student,
+        emailAndPopUps: true,
         avatarUrl: `https://api.dicebear.com/9.x/avataaars/svg?seed=${slugify(name)}`,
         // Spread across ~12 months, tightening towards today so the recent
         // ranges are populated. The last few sign up inside the last week.

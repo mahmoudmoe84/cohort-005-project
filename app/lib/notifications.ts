@@ -33,6 +33,9 @@ export type Notification = {
   readAt: string | null;
 };
 
+/** The Notification settings page, which holds the switch for email and pop-ups. */
+export const NOTIFICATION_SETTINGS_URL = "/settings/notifications";
+
 /**
  * What the browser needs to connect to one person's Notification Feed. Cadence
  * hands it from the Notification Provider to the browser untouched: only the
