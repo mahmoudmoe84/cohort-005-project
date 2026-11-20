@@ -1394,7 +1394,7 @@ describe("markNotificationsRead", () => {
     await markNotificationsRead(
       db,
       alex.id,
-      { page: "refund-request-review" },
+      { page: "refund-request-review", refundRequestIds: [refundRequest.id] },
       provider
     );
 
@@ -1405,6 +1405,42 @@ describe("markNotificationsRead", () => {
       alex: [{ kind: "open-refund-request", read: true }],
       pat: [{ kind: "open-refund-request", read: false }],
     });
+  });
+
+  // The review page shows one status at a time, Open unless told otherwise.
+  it("marks Open Refund Request read only for the Refund Requests the review page shows", async () => {
+    const provider = createFakeNotificationProvider();
+    const alex = addPlatformAdmin("Alex Rivera");
+    const shown = raiseRefundRequest(
+      buyCourse(liam.id, 7900).id,
+      "The pace is too fast for me."
+    );
+    await notifyOpenRefundRequest(db, shown.id, provider);
+    const notShown = raiseRefundRequest(
+      buyCourse(addStudent("Ava Nakamura").id, 7900).id,
+      "I bought the wrong course."
+    );
+    await notifyOpenRefundRequest(db, notShown.id, provider);
+
+    await markNotificationsRead(
+      db,
+      alex.id,
+      { page: "refund-request-review", refundRequestIds: [shown.id] },
+      provider
+    );
+
+    expect(
+      provider
+        .feedOf(alex.id)
+        .page()
+        .notifications.map(({ excerpt, readAt }) => ({
+          excerpt,
+          read: readAt !== null,
+        }))
+    ).toEqual([
+      { excerpt: "I bought the wrong course.", read: false },
+      { excerpt: "The pace is too fast for me.", read: true },
+    ]);
   });
 
   it("marks Seat claimed read when the Team Admin opens the team page", async () => {
@@ -1447,7 +1483,15 @@ describe("markNotificationsRead", () => {
       claimSeat(seats[0].id, liam.id);
       await notifySeatClaimed(db, seats[0].id, provider);
 
-      await markNotificationsRead(db, pat.id, { page }, provider);
+      await markNotificationsRead(
+        db,
+        pat.id,
+        // The review page shows Liam's Open Refund Request.
+        page === "refund-request-review"
+          ? { page, refundRequestIds: [liamsRefundRequest.id] }
+          : { page },
+        provider
+      );
 
       expect(readStates(provider, pat.id)).toEqual([
         { kind: "seat-claimed", read: kind === "seat-claimed" },

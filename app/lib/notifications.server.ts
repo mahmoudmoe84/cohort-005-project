@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
 import {
@@ -689,19 +689,15 @@ export type LinkedPage =
   | { page: "lesson"; lessonId: number }
   /** The buyer's Refund Requests, in settings. */
   | { page: "refund-requests" }
-  | { page: "refund-request-review" }
+  | {
+      page: "refund-request-review";
+      /** The Refund Requests it shows. It shows one status at a time. */
+      refundRequestIds: number[];
+    }
   | { page: "team" };
 
-// Every page but the lesson shows everything its one kind of Notification is
-// about, so it marks all of them.
-const KIND_LINKING_TO = {
-  "refund-requests": "refund-request-decided",
-  "refund-request-review": "open-refund-request",
-  team: "seat-claimed",
-} satisfies Record<Exclude<LinkedPage["page"], "lesson">, NotificationKind>;
-
-// The person's own Notifications about the page, and nobody else's, that
-// Cadence hasn't had marked read yet.
+// The person's own Notifications about what the page shows, and nobody
+// else's, that Cadence hasn't had marked read yet.
 function findNotificationsToMark(db: Db, userId: number, page: LinkedPage) {
   const theirsToMark = and(
     eq(sentNotifications.recipientId, userId),
@@ -711,24 +707,45 @@ function findNotificationsToMark(db: Db, userId: number, page: LinkedPage) {
     id: sentNotifications.id,
     workflowRunId: sentNotifications.workflowRunId,
   };
-
-  // Discussion Questions and Discussion Replies on that lesson.
-  if (page.page === "lesson") {
-    return db
+  const everyOne = (kind: NotificationKind) =>
+    db
       .select(columns)
       .from(sentNotifications)
-      .innerJoin(comments, eq(sentNotifications.commentId, comments.id))
-      .where(and(theirsToMark, eq(comments.lessonId, page.lessonId)))
+      .where(and(theirsToMark, eq(sentNotifications.kind, kind)))
       .all();
-  }
 
-  return db
-    .select(columns)
-    .from(sentNotifications)
-    .where(
-      and(theirsToMark, eq(sentNotifications.kind, KIND_LINKING_TO[page.page]))
-    )
-    .all();
+  switch (page.page) {
+    // Discussion Questions and Discussion Replies on that lesson.
+    case "lesson":
+      return db
+        .select(columns)
+        .from(sentNotifications)
+        .innerJoin(comments, eq(sentNotifications.commentId, comments.id))
+        .where(and(theirsToMark, eq(comments.lessonId, page.lessonId)))
+        .all();
+
+    // Only the Open Refund Requests it shows.
+    case "refund-request-review":
+      return db
+        .select(columns)
+        .from(sentNotifications)
+        .where(
+          and(
+            theirsToMark,
+            eq(sentNotifications.kind, "open-refund-request"),
+            inArray(sentNotifications.refundRequestId, page.refundRequestIds)
+          )
+        )
+        .all();
+
+    // It shows all the buyer's Refund Requests.
+    case "refund-requests":
+      return everyOne("refund-request-decided");
+
+    // Seat claimed is about the team page as a whole.
+    case "team":
+      return everyOne("seat-claimed");
+  }
 }
 
 /**

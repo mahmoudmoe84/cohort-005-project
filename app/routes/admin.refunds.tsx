@@ -87,17 +87,17 @@ export async function loader({ request, url }: Route.LoaderArgs) {
   const platformAdmin = await requirePlatformAdmin(request);
 
   const status = refundFilterSchema.parse(url.searchParams.get("status"));
+  const refundRequests = listRefundRequestsForReview(db, status, new Date());
 
-  // Open Refund Request Notifications link here, so the Platform Admin's are
-  // read, however they got here. This never throws.
+  // Open Refund Request Notifications link here, so the Platform Admin's
+  // about the Refund Requests shown are read, however they got here. This
+  // never throws.
   await markNotificationsRead(db, platformAdmin.id, {
     page: "refund-request-review",
+    refundRequestIds: refundRequests.map((refundRequest) => refundRequest.id),
   });
 
-  return {
-    status,
-    refundRequests: listRefundRequestsForReview(db, status, new Date()),
-  };
+  return { status, refundRequests };
 }
 
 export async function action({ request }: Route.ActionArgs) {
