@@ -383,7 +383,13 @@ describe("declining a Refund Request", () => {
     const purchase = buyForSelf(base.user.id);
     const id = raise(purchase.id, base.user.id);
 
-    declineRefundRequest(db, id, platformAdmin.id, "You finished the course.", NOW);
+    declineRefundRequest(
+      db,
+      id,
+      platformAdmin.id,
+      "You finished the course.",
+      NOW
+    );
 
     expect(isEnrolled(base.user.id)).toBe(true);
     expect(checkRefundRequest(db, purchase.id, base.user.id, NOW).ok).toBe(true);
@@ -396,7 +402,13 @@ describe("declining a Refund Request", () => {
     const id = raise(purchase.id, base.user.id);
 
     expect(
-      declineRefundRequest(db, id, platformAdmin.id, "You finished the course.", NOW)
+      declineRefundRequest(
+        db,
+        id,
+        platformAdmin.id,
+        "You finished the course.",
+        NOW
+      )
     ).toEqual({ ok: true });
   });
 
