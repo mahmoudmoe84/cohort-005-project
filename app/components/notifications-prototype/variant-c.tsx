@@ -38,6 +38,11 @@ export function VariantCNavItem() {
     return () => clearTimeout(timer);
   }, [popUp]);
 
+  // Opening the Notifications page answers the callout.
+  useEffect(() => {
+    if (prototype.feedOpen) setPopUp(null);
+  }, [prototype.feedOpen]);
+
   return (
     <div className="relative">
       <NavLink
