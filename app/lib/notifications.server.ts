@@ -193,8 +193,8 @@ type CommentWithAuthor = NonNullable<ReturnType<typeof getCommentWithAuthor>>;
 // Plain text, like Cadence's other transactional email. The switch can stop
 // this email, so it ends with a footer line linking to Notification settings.
 function discussionReplyEmail(
-  question: CommentWithAuthor,
-  reply: CommentWithAuthor,
+  discussionQuestion: CommentWithAuthor,
+  discussionReply: CommentWithAuthor,
   course: Course,
   lesson: Lesson | undefined
 ): NotificationEmail {
@@ -203,15 +203,15 @@ function discussionReplyEmail(
     : `"${course.title}"`;
 
   return {
-    subject: `${reply.authorName} replied to your Discussion Question on ${lesson?.title ?? course.title}`,
+    subject: `${discussionReply.authorName} replied to your Discussion Question on ${lesson?.title ?? course.title}`,
     body: [
-      `Hi ${question.authorName},`,
+      `Hi ${discussionQuestion.authorName},`,
       "",
-      `${reply.authorName} replied to your Discussion Question on ${where}:`,
+      `${discussionReply.authorName} replied to your Discussion Question on ${where}:`,
       "",
-      quote(reply.body),
+      quote(discussionReply.body),
       "",
-      `View it on Cadence: ${absoluteUrl(discussionLink(course, lesson, reply.id))}`,
+      `View it on Cadence: ${absoluteUrl(discussionLink(course, lesson, discussionReply.id))}`,
       "",
       "— The Cadence team",
       "",
@@ -364,8 +364,9 @@ async function send(
 
 /**
  * Tells a Discussion Question's author that someone posted a Discussion Reply
- * to it. Call it once the reply is saved. It never throws: a failure is logged,
- * so the reply still gets posted. The provider defaults to the configured one.
+ * to it. Call it once the Discussion Reply is saved. It never throws: a
+ * failure is logged, so the Discussion Reply still gets posted. The provider
+ * defaults to the configured one.
  */
 export async function notifyDiscussionReply(
   db: Db,
@@ -374,39 +375,59 @@ export async function notifyDiscussionReply(
   provider?: NotificationProvider
 ): Promise<void> {
   try {
-    const reply = getCommentWithAuthor(db, discussionReplyId);
-    if (!reply || reply.parentId === null) return;
+    const discussionReply = getCommentWithAuthor(db, discussionReplyId);
+    if (!discussionReply || discussionReply.parentId === null) return;
 
-    const question = getCommentWithAuthor(db, reply.parentId);
+    const discussionQuestion = getCommentWithAuthor(
+      db,
+      discussionReply.parentId
+    );
     const course = getCourse(db, courseId);
-    const lesson = getLesson(db, reply.lessonId);
-    if (!question || !course) return;
+    const lesson = getLesson(db, discussionReply.lessonId);
+    if (!discussionQuestion || !course) return;
 
     // The Instructor's own top-level comment isn't a Discussion Question, so a
-    // reply to it isn't a Discussion Reply.
-    if (question.authorId === course.instructorId) return;
+    // comment answering it isn't a Discussion Reply.
+    if (discussionQuestion.authorId === course.instructorId) return;
 
     // Nobody hears about their own action.
-    if (question.authorId === reply.authorId) return;
+    if (discussionQuestion.authorId === discussionReply.authorId) return;
 
     await send(
       db,
       {
         kind: "discussion-reply",
-        recipients: [{ id: question.authorId, email: question.authorEmail }],
-        actor: { name: reply.authorName, avatarUrl: reply.authorAvatarUrl },
+        recipients: [
+          {
+            id: discussionQuestion.authorId,
+            email: discussionQuestion.authorEmail,
+          },
+        ],
+        actor: {
+          name: discussionReply.authorName,
+          avatarUrl: discussionReply.authorAvatarUrl,
+        },
         content: {
-          summary: discussionReplySummary(reply.authorName, course, lesson),
-          excerpt: reply.body,
+          summary: discussionReplySummary(
+            discussionReply.authorName,
+            course,
+            lesson
+          ),
+          excerpt: discussionReply.body,
           context: course.title,
-          url: discussionLink(course, lesson, reply.id),
+          url: discussionLink(course, lesson, discussionReply.id),
           // The author's switch drops the email, and only the email.
-          email: question.authorEmailAndPopUps
-            ? discussionReplyEmail(question, reply, course, lesson)
+          email: discussionQuestion.authorEmailAndPopUps
+            ? discussionReplyEmail(
+                discussionQuestion,
+                discussionReply,
+                course,
+                lesson
+              )
             : undefined,
         },
       },
-      { commentId: reply.id },
+      { commentId: discussionReply.id },
       provider
     );
   } catch (error) {
@@ -430,15 +451,18 @@ export async function notifyDiscussionQuestion(
   provider?: NotificationProvider
 ): Promise<void> {
   try {
-    const question = getCommentWithAuthor(db, discussionQuestionId);
+    const discussionQuestion = getCommentWithAuthor(db, discussionQuestionId);
     const course = getCourse(db, courseId);
-    if (!question || question.parentId !== null || !course) return;
+    if (!discussionQuestion || !course) return;
+
+    // A comment with a parent answers a Discussion Question instead.
+    if (discussionQuestion.parentId !== null) return;
 
     // The Instructor's own top-level comment isn't a Discussion Question, and
     // nobody hears about their own action.
-    if (question.authorId === course.instructorId) return;
+    if (discussionQuestion.authorId === course.instructorId) return;
 
-    const lesson = getLesson(db, question.lessonId);
+    const lesson = getLesson(db, discussionQuestion.lessonId);
     const instructor = getRecipient(db, course.instructorId);
     if (!instructor) return;
 
@@ -448,21 +472,21 @@ export async function notifyDiscussionQuestion(
         kind: "discussion-question",
         recipients: [instructor],
         actor: {
-          name: question.authorName,
-          avatarUrl: question.authorAvatarUrl,
+          name: discussionQuestion.authorName,
+          avatarUrl: discussionQuestion.authorAvatarUrl,
         },
         content: {
           summary: discussionQuestionSummary(
-            question.authorName,
+            discussionQuestion.authorName,
             course,
             lesson
           ),
-          excerpt: question.body,
+          excerpt: discussionQuestion.body,
           context: course.title,
-          url: discussionLink(course, lesson, question.id),
+          url: discussionLink(course, lesson, discussionQuestion.id),
         },
       },
-      { commentId: question.id },
+      { commentId: discussionQuestion.id },
       provider
     );
   } catch (error) {
