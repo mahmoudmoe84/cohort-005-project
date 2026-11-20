@@ -119,21 +119,23 @@ function fakeNotificationFeedClient(userId: number): NotificationFeedClient {
     }
   }
 
-  // The first look only learns what's already there. After that, anything
-  // not seen before has just arrived.
-  function takeIn(notifications: Notification[]): Notification[] {
-    const arrivals = hasLooked
-      ? notifications.filter((notification) => !known.has(notification.id))
-      : [];
+  // Anything not seen before has just arrived, except on the first look,
+  // which only learns what's already there.
+  function arrivalsAmong(notifications: Notification[]): Notification[] {
+    if (!hasLooked) return [];
+    return notifications.filter((notification) => !known.has(notification.id));
+  }
+
+  function remember(notifications: Notification[]) {
     for (const notification of notifications) known.add(notification.id);
     hasLooked = true;
-    return arrivals;
   }
 
   async function lookForArrivals() {
     try {
       const page = await readPage();
-      const arrived = takeIn(page.notifications).reverse();
+      const arrived = arrivalsAmong(page.notifications).reverse();
+      remember(page.notifications);
       if (!connected) return;
       arrivals.arrived(arrived);
     } catch (error) {
@@ -149,7 +151,7 @@ function fakeNotificationFeedClient(userId: number): NotificationFeedClient {
       // The first page is what's already there, so none of it counts as
       // arriving. A page fetched later, after a navigation, leaves arrivals to
       // the poll, so they still pop up.
-      if (!hasLooked) takeIn(notifications);
+      if (!hasLooked) remember(notifications);
       return { notifications, nextCursor };
     },
 

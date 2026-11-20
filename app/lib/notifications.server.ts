@@ -373,10 +373,11 @@ function refundRequestDecidedEmail(
  */
 type SentAbout = { commentId?: number; refundRequestId?: number };
 
-// The Notification itself stays at the Notification Provider. Cadence stores
-// the send's workflow run id for each recipient, so it can mark their copy
-// read once they open the page it links to.
-async function send(
+// Sends the Notification, then records the send for each recipient. The
+// Notification itself stays at the Notification Provider: Cadence keeps the
+// send's workflow run id, so it can mark their copy read once they open the
+// page it links to.
+async function sendAndRecord(
   db: Db,
   notification: NotificationSend,
   about: SentAbout,
@@ -449,7 +450,7 @@ export async function notifyDiscussionReply(
       if (discussionQuestion.author.id === discussionReply.author.id) return;
 
       const place = { course, lesson: getLesson(db, discussionReply.lessonId) };
-      await send(
+      await sendAndRecord(
         db,
         {
           kind: "discussion-reply",
@@ -513,7 +514,7 @@ export async function notifyDiscussionQuestion(
         course,
         lesson: getLesson(db, discussionQuestion.lessonId),
       };
-      await send(
+      await sendAndRecord(
         db,
         {
           kind: "discussion-question",
@@ -561,7 +562,7 @@ export async function notifyOpenRefundRequest(
       );
       if (platformAdmins.length === 0) return;
 
-      await send(
+      await sendAndRecord(
         db,
         {
           kind: "open-refund-request",
@@ -611,7 +612,7 @@ export async function notifySeatClaimed(
       const teamAdmin = getRecipient(db, seat.teamAdminId);
       if (!teamAdmin) return;
 
-      await send(
+      await sendAndRecord(
         db,
         {
           kind: "seat-claimed",
@@ -657,7 +658,7 @@ export async function notifyRefundRequestDecided(
       // their own Refund Request.
       if (refundRequest.decidedById === refundRequest.buyer.id) return;
 
-      await send(
+      await sendAndRecord(
         db,
         {
           kind: "refund-request-decided",

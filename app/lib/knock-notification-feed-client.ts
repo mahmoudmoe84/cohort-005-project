@@ -170,9 +170,10 @@ export function connectKnockNotificationFeed(
     };
   }
 
-  // Remembers each item, and leaves out any that isn't a Cadence
-  // Notification, such as a test sent from Knock's dashboard.
-  function takeIn(items: FeedItem[]): Notification[] {
+  // Turns Knock's items into the Notifications this client hands out, and
+  // remembers each item in handedOut. Leaves out any item that isn't a
+  // Cadence Notification, such as a test sent from Knock's dashboard.
+  function handOut(items: FeedItem[]): Notification[] {
     const notifications: Notification[] = [];
     for (const item of items) {
       const notification = toNotification(item);
@@ -192,7 +193,7 @@ export function connectKnockNotificationFeed(
   // Knock fetches what arrived after the newest item it holds and lists it
   // newest first. Call back oldest first, as they arrived.
   function onRealtime({ items }: FeedEventPayload) {
-    const arrived = takeIn(items.filter((item) => !handedOut.has(item.id)));
+    const arrived = handOut(items.filter((item) => !handedOut.has(item.id)));
     arrivals.arrived(arrived.reverse());
   }
   feed.on("items.received.realtime", onRealtime);
@@ -236,7 +237,7 @@ export function connectKnockNotificationFeed(
       const { items, nextCursor } = await page.finally(() => {
         fetching.delete(page);
       });
-      const notifications = takeIn(items);
+      const notifications = handOut(items);
       // Listen only once the newest page is in. Before that Knock holds no
       // items, so its first live fetch would bring the whole newest page as
       // if it had just arrived.
