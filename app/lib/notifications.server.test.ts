@@ -11,6 +11,7 @@ import {
   createFakeNotificationProvider,
   type FakeNotificationProvider,
   type NotificationProvider,
+  type NotificationReadMark,
 } from "./notification-provider.server";
 import {
   markNotificationsRead,
@@ -199,15 +200,35 @@ function failingProvider(failure: Error): NotificationProvider {
   };
 }
 
-// Sends through the fake, but can't mark anything read.
+// Sends through the fake, but can't mark anything read. Keeps what it's asked
+// to mark in `asked`.
 function failingToMarkRead(
   provider: FakeNotificationProvider,
   failure: Error
-): NotificationProvider {
+): NotificationProvider & { asked: NotificationReadMark[] } {
+  const asked: NotificationReadMark[] = [];
   return {
     ...provider,
-    async markRead() {
+    asked,
+    async markRead(mark) {
+      asked.push(mark);
       throw failure;
+    },
+  };
+}
+
+// Sends through the fake, but never finishes marking anything read. Keeps
+// what it's asked to mark in `asked`.
+function neverFinishingMarkRead(
+  provider: FakeNotificationProvider
+): NotificationProvider & { asked: NotificationReadMark[] } {
+  const asked: NotificationReadMark[] = [];
+  return {
+    ...provider,
+    asked,
+    markRead(mark) {
+      asked.push(mark);
+      return new Promise(() => {});
     },
   };
 }
@@ -1394,7 +1415,7 @@ describe("markNotificationsRead", () => {
     await markNotificationsRead(
       db,
       alex.id,
-      { page: "refund-request-review" },
+      { page: "refund-request-review", refundRequestIds: [refundRequest.id] },
       provider
     );
 
@@ -1405,6 +1426,42 @@ describe("markNotificationsRead", () => {
       alex: [{ kind: "open-refund-request", read: true }],
       pat: [{ kind: "open-refund-request", read: false }],
     });
+  });
+
+  // The review page shows one status at a time, Open unless told otherwise.
+  it("marks Open Refund Request read only for the Refund Requests the review page shows", async () => {
+    const provider = createFakeNotificationProvider();
+    const alex = addPlatformAdmin("Alex Rivera");
+    const shown = raiseRefundRequest(
+      buyCourse(liam.id, 7900).id,
+      "The pace is too fast for me."
+    );
+    await notifyOpenRefundRequest(db, shown.id, provider);
+    const notShown = raiseRefundRequest(
+      buyCourse(addStudent("Ava Nakamura").id, 7900).id,
+      "I bought the wrong course."
+    );
+    await notifyOpenRefundRequest(db, notShown.id, provider);
+
+    await markNotificationsRead(
+      db,
+      alex.id,
+      { page: "refund-request-review", refundRequestIds: [shown.id] },
+      provider
+    );
+
+    expect(
+      provider
+        .feedOf(alex.id)
+        .page()
+        .notifications.map(({ excerpt, readAt }) => ({
+          excerpt,
+          read: readAt !== null,
+        }))
+    ).toEqual([
+      { excerpt: "I bought the wrong course.", read: false },
+      { excerpt: "The pace is too fast for me.", read: true },
+    ]);
   });
 
   it("marks Seat claimed read when the Team Admin opens the team page", async () => {
@@ -1447,7 +1504,15 @@ describe("markNotificationsRead", () => {
       claimSeat(seats[0].id, liam.id);
       await notifySeatClaimed(db, seats[0].id, provider);
 
-      await markNotificationsRead(db, pat.id, { page }, provider);
+      await markNotificationsRead(
+        db,
+        pat.id,
+        // The review page shows Liam's Open Refund Request.
+        page === "refund-request-review"
+          ? { page, refundRequestIds: [liamsRefundRequest.id] }
+          : { page },
+        provider
+      );
 
       expect(readStates(provider, pat.id)).toEqual([
         { kind: "seat-claimed", read: kind === "seat-claimed" },
@@ -1562,6 +1627,145 @@ describe("markNotificationsRead", () => {
     expect(readStates(provider, liam.id)).toEqual([
       { kind: "discussion-reply", read: true },
     ]);
+  });
+
+  // Knock, for one, can't find a Notification once it's older than its
+  // message log, however often it's asked.
+  it("stops asking after three tries that failed to mark it read", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+    const reply = postDiscussionReply(
+      base.instructor.id,
+      question.id,
+      "Most of the time. Unions need no runtime code."
+    );
+    await notifyDiscussionReply(db, base.course.id, reply.id, provider);
+    const failing = failingToMarkRead(
+      provider,
+      new Error("There's no such in-app message")
+    );
+
+    for (let opened = 1; opened <= 4; opened++) {
+      await markNotificationsRead(
+        db,
+        liam.id,
+        { page: "lesson", lessonId: lesson.id },
+        failing
+      );
+    }
+
+    expect(failing.asked).toHaveLength(3);
+  });
+
+  describe("while the Notification Provider is slow", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("waits for it no more than a second, so the page still opens", async () => {
+      const provider = createFakeNotificationProvider();
+      const question = askDiscussionQuestion(
+        liam.id,
+        "When should I reach for a union instead of an enum?"
+      );
+      const reply = postDiscussionReply(
+        base.instructor.id,
+        question.id,
+        "Most of the time. Unions need no runtime code."
+      );
+      await notifyDiscussionReply(db, base.course.id, reply.id, provider);
+      let pageOpened = false;
+
+      void markNotificationsRead(
+        db,
+        liam.id,
+        { page: "lesson", lessonId: lesson.id },
+        neverFinishingMarkRead(provider)
+      ).then(() => {
+        pageOpened = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(pageOpened).toBe(true);
+    });
+
+    it("asks about every Notification on the page at once, not one after another", async () => {
+      const provider = createFakeNotificationProvider();
+      for (const body of [
+        "When should I reach for a union instead of an enum?",
+        "Is never the same as void?",
+      ]) {
+        const question = askDiscussionQuestion(liam.id, body);
+        const reply = postDiscussionReply(
+          base.instructor.id,
+          question.id,
+          "Good question. Here's how I think about it."
+        );
+        await notifyDiscussionReply(db, base.course.id, reply.id, provider);
+      }
+      const [first, second] = provider.sent;
+      const slow = neverFinishingMarkRead(provider);
+
+      const opening = markNotificationsRead(
+        db,
+        liam.id,
+        { page: "lesson", lessonId: lesson.id },
+        slow
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      await opening;
+
+      expect(slow.asked).toHaveLength(2);
+      expect(slow.asked).toEqual(
+        expect.arrayContaining([
+          { workflowRunId: first.workflowRunId, userId: liam.id },
+          { workflowRunId: second.workflowRunId, userId: liam.id },
+        ])
+      );
+    });
+
+    it("doesn't ask again about a Notification it marked after the page opened", async () => {
+      const provider = createFakeNotificationProvider();
+      const question = askDiscussionQuestion(
+        liam.id,
+        "When should I reach for a union instead of an enum?"
+      );
+      const reply = postDiscussionReply(
+        base.instructor.id,
+        question.id,
+        "Most of the time. Unions need no runtime code."
+      );
+      await notifyDiscussionReply(db, base.course.id, reply.id, provider);
+      const lessonPage = { page: "lesson", lessonId: lesson.id } as const;
+      const takingFiveSeconds: NotificationProvider = {
+        ...provider,
+        async markRead(mark) {
+          await new Promise((resolve) => setTimeout(resolve, 5_000));
+          await provider.markRead(mark);
+        },
+      };
+      const opening = markNotificationsRead(
+        db,
+        liam.id,
+        lessonPage,
+        takingFiveSeconds
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      await opening;
+      await vi.advanceTimersByTimeAsync(4_000);
+
+      await markNotificationsRead(db, liam.id, lessonPage, provider);
+
+      expect(provider.markedRead).toHaveLength(1);
+    });
   });
 });
 

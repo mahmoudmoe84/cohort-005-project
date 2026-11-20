@@ -1,0 +1,1 @@
+ALTER TABLE `sent_notifications` ADD `mark_read_attempts` integer DEFAULT 0 NOT NULL;

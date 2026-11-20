@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type {
-  FeedCredentials,
-  Notification,
-  NotificationActor,
-  NotificationKind,
-  SummaryPart,
+import {
+  NOTIFICATION_FEED_PAGE_SIZE,
+  type FeedCredentials,
+  type Notification,
+  type NotificationActor,
+  type NotificationKind,
+  type SummaryPart,
 } from "~/lib/notifications";
+import type { FakeFeedCredentials } from "~/lib/notification-feed-client";
 import { outboxTransport, type MailTransport } from "~/lib/mailer.server";
 import { configuredKnockNotificationProvider } from "~/lib/knock-notification-provider.server";
 
@@ -53,8 +55,9 @@ export interface NotificationProvider {
   /**
    * Marks read what that send put in that person's Notification Feed, and
    * nobody else's. Resolves once it's read, including when it already was,
-   * and Cadence doesn't ask about it again. Throws if it can't be marked, and
-   * Cadence asks again the next time the person opens its page.
+   * and Cadence doesn't ask about it again. Throws if it can't be marked.
+   * Cadence then asks again the next time the person opens its page, and
+   * gives up after three tries.
    */
   markRead(mark: NotificationReadMark): Promise<void>;
 }
@@ -65,8 +68,6 @@ export interface NotificationProvider {
 // Notification Feed to the fake browser client. Email it's asked for goes to
 // each recipient through `mail`, which is the .outbox/ transport for the fake
 // Cadence uses. Without `mail`, email is only recorded in `sent`.
-
-const FEED_PAGE_SIZE = 20;
 
 // Notification email comes from this address, unlike Cadence's other
 // transactional email. Through Knock it's set on Knock's Postmark channel
@@ -155,8 +156,10 @@ export function createFakeNotificationProvider(
       return workflowRunId;
     },
 
+    // What the fake browser client parses back out.
     async feedCredentials(userId) {
-      return { provider: "fake", userId };
+      const credentials: FakeFeedCredentials = { provider: "fake", userId };
+      return credentials;
     },
 
     async markRead({ workflowRunId, userId }) {
@@ -181,7 +184,10 @@ export function createFakeNotificationProvider(
             cursor === undefined
               ? 0
               : all.findIndex((notification) => notification.id === cursor) + 1;
-          const notifications = all.slice(start, start + FEED_PAGE_SIZE);
+          const notifications = all.slice(
+            start,
+            start + NOTIFICATION_FEED_PAGE_SIZE
+          );
           const last = notifications.at(-1);
           const hasMore = start + notifications.length < all.length;
           return {

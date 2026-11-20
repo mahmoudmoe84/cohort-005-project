@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
 import {
@@ -14,8 +14,11 @@ import {
   UserRole,
 } from "~/db/schema";
 import {
+  emailAndPopUpsOn,
   NOTIFICATION_SETTINGS_URL,
+  summaryText,
   type FeedCredentials,
+  type NotificationActor,
   type NotificationKind,
   type SummaryPart,
 } from "~/lib/notifications";
@@ -25,6 +28,7 @@ import {
   configuredNotificationProvider,
   type NotificationEmail,
   type NotificationProvider,
+  type NotificationRecipient,
   type NotificationSend,
 } from "~/lib/notification-provider.server";
 
@@ -38,6 +42,36 @@ import {
 
 type Db = BetterSQLite3Database<typeof schema>;
 
+// A person a Notification is from or to: the author of a comment, the buyer
+// of a Purchase, or the Student who claimed a Seat. Each query selects them
+// with these columns.
+const personColumns = {
+  id: users.id,
+  name: users.name,
+  email: users.email,
+  avatarUrl: users.avatarUrl,
+  emailAndPopUps: users.emailAndPopUps,
+};
+
+type Person = {
+  id: number;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  /** Their switch on Notification settings. */
+  emailAndPopUps: boolean;
+};
+
+/** Who did it, as the Notification shows them: never their email address. */
+function asActor(person: Person): NotificationActor {
+  return { name: person.name, avatarUrl: person.avatarUrl };
+}
+
+/** Only what the Notification Provider needs to reach them. */
+function asRecipient(person: Person): NotificationRecipient {
+  return { id: person.id, email: person.email };
+}
+
 function getCommentWithAuthor(db: Db, commentId: number) {
   return db
     .select({
@@ -45,11 +79,7 @@ function getCommentWithAuthor(db: Db, commentId: number) {
       parentId: comments.parentId,
       lessonId: comments.lessonId,
       body: comments.body,
-      authorId: users.id,
-      authorName: users.name,
-      authorEmail: users.email,
-      authorAvatarUrl: users.avatarUrl,
-      authorEmailAndPopUps: users.emailAndPopUps,
+      author: personColumns,
     })
     .from(comments)
     .innerJoin(users, eq(comments.userId, users.id))
@@ -105,10 +135,7 @@ function getRefundRequestWithBuyer(db: Db, refundRequestId: number) {
       decidedById: refunds.resolvedByUserId,
       amountPaid: purchases.amountPaid,
       courseTitle: courses.title,
-      buyerId: users.id,
-      buyerName: users.name,
-      buyerEmail: users.email,
-      buyerAvatarUrl: users.avatarUrl,
+      buyer: personColumns,
     })
     .from(refunds)
     .innerJoin(purchases, eq(refunds.purchaseId, purchases.id))
@@ -130,9 +157,7 @@ function getClaimedSeat(db: Db, seatId: number) {
       teamLicenceId: coupons.purchaseId,
       teamAdminId: purchases.userId,
       courseTitle: courses.title,
-      studentId: users.id,
-      studentName: users.name,
-      studentAvatarUrl: users.avatarUrl,
+      student: personColumns,
     })
     .from(coupons)
     .innerJoin(users, eq(coupons.redeemedByUserId, users.id))
@@ -161,30 +186,27 @@ function countSeats(db: Db, teamLicenceId: number) {
 type Course = { title: string; slug: string };
 type Lesson = { id: number; title: string };
 
-// Discussion Questions and Discussion Replies live on a lesson. If the lesson
-// has gone, the Notification names the course and links to the course page.
+/**
+ * Where a Discussion Question or Discussion Reply was posted: a lesson in a
+ * course. If the lesson has gone, the Notification names the course and links
+ * to the course page instead.
+ */
+type DiscussionPlace = { course: Course; lesson: Lesson | undefined };
 
-function discussionQuestionSummary(
-  askerName: string,
-  course: Course,
-  lesson: Lesson | undefined
-): SummaryPart[] {
-  return [
-    { text: askerName, strong: true },
-    { text: " asked a Discussion Question on " },
-    { text: lesson?.title ?? course.title, strong: true },
-  ];
+function placeTitle({ course, lesson }: DiscussionPlace): string {
+  return lesson?.title ?? course.title;
 }
 
-function discussionReplySummary(
-  replierName: string,
-  course: Course,
-  lesson: Lesson | undefined
+// Who did what, on which lesson.
+function discussionSummary(
+  authorName: string,
+  didWhat: string,
+  place: DiscussionPlace
 ): SummaryPart[] {
   return [
-    { text: replierName, strong: true },
-    { text: " replied to your Discussion Question on " },
-    { text: lesson?.title ?? course.title, strong: true },
+    { text: authorName, strong: true },
+    { text: didWhat },
+    { text: placeTitle(place), strong: true },
   ];
 }
 
@@ -193,25 +215,25 @@ type CommentWithAuthor = NonNullable<ReturnType<typeof getCommentWithAuthor>>;
 // Plain text, like Cadence's other transactional email. The switch can stop
 // this email, so it ends with a footer line linking to Notification settings.
 function discussionReplyEmail(
-  question: CommentWithAuthor,
-  reply: CommentWithAuthor,
-  course: Course,
-  lesson: Lesson | undefined
+  discussionQuestion: CommentWithAuthor,
+  discussionReply: CommentWithAuthor,
+  place: DiscussionPlace
 ): NotificationEmail {
+  const { course, lesson } = place;
   const where = lesson
     ? `"${lesson.title}" in "${course.title}"`
     : `"${course.title}"`;
 
   return {
-    subject: `${reply.authorName} replied to your Discussion Question on ${lesson?.title ?? course.title}`,
+    subject: `${discussionReply.author.name} replied to your Discussion Question on ${placeTitle(place)}`,
     body: [
-      `Hi ${question.authorName},`,
+      `Hi ${discussionQuestion.author.name},`,
       "",
-      `${reply.authorName} replied to your Discussion Question on ${where}:`,
+      `${discussionReply.author.name} replied to your Discussion Question on ${where}:`,
       "",
-      quote(reply.body),
+      quote(discussionReply.body),
       "",
-      `View it on Cadence: ${absoluteUrl(discussionLink(course, lesson, reply.id))}`,
+      `View it on Cadence: ${absoluteUrl(discussionLink(place, discussionReply.id))}`,
       "",
       "— The Cadence team",
       "",
@@ -230,8 +252,7 @@ function quote(text: string): string {
 
 // Every comment on the lesson page carries an id="comment-<id>" anchor.
 function discussionLink(
-  course: Course,
-  lesson: Lesson | undefined,
+  { course, lesson }: DiscussionPlace,
   commentId: number
 ): string {
   if (!lesson) return `/courses/${course.slug}`;
@@ -273,13 +294,16 @@ function seatClaimedSummary(
 const REFUND_REQUESTS_URL = "/settings#refund-requests";
 
 // Signed by Cadence, not the Platform Admin. An approval says what's on its
-// way back: the Refund, which is always the full amount the buyer paid.
-function refundRequestDecidedSummary(
-  refundRequest: RefundRequestWithBuyer
+// way back: the Refund, which is always the full amount the buyer paid. The
+// in-app summary and the email say it the same way, each naming the course
+// in its own style.
+function refundRequestDecision(
+  refundRequest: RefundRequestWithBuyer,
+  course: SummaryPart
 ): SummaryPart[] {
   const yourRefundRequest: SummaryPart[] = [
     { text: "Your Refund Request for " },
-    { text: refundRequest.courseTitle, strong: true },
+    course,
   ];
 
   if (refundRequest.status !== RefundStatus.Approved) {
@@ -294,6 +318,16 @@ function refundRequestDecidedSummary(
   ];
 }
 
+// The course in bold.
+function refundRequestDecidedSummary(
+  refundRequest: RefundRequestWithBuyer
+): SummaryPart[] {
+  return refundRequestDecision(refundRequest, {
+    text: refundRequest.courseTitle,
+    strong: true,
+  });
+}
+
 // Plain text, like Cadence's other transactional email. The switch can't stop
 // this email, so unlike the Discussion Reply email it has no footer pointing
 // at Notification settings.
@@ -303,9 +337,10 @@ function refundRequestDecidedEmail(
   const { courseTitle, decisionNote } = refundRequest;
   const approved = refundRequest.status === RefundStatus.Approved;
 
-  const decision = approved
-    ? `Your Refund Request for "${courseTitle}" was approved. ${formatPrice(refundRequest.amountPaid)} is on its way back to you.`
-    : `Your Refund Request for "${courseTitle}" was declined.`;
+  // The course in quotes.
+  const decision = summaryText(
+    refundRequestDecision(refundRequest, { text: `"${courseTitle}"` })
+  );
   const note = decisionNote ? ["", decisionNote] : [];
   const whatNext = approved
     ? []
@@ -317,7 +352,7 @@ function refundRequestDecidedEmail(
   return {
     subject: `Your Refund Request for ${courseTitle} was ${approved ? "approved" : "declined"}`,
     body: [
-      `Hi ${refundRequest.buyerName},`,
+      `Hi ${refundRequest.buyer.name},`,
       "",
       decision,
       ...note,
@@ -338,10 +373,11 @@ function refundRequestDecidedEmail(
  */
 type SentAbout = { commentId?: number; refundRequestId?: number };
 
-// The Notification itself stays at the Notification Provider. Cadence stores
-// the send's workflow run id for each recipient, so it can mark their copy
-// read once they open the page it links to.
-async function send(
+// Sends the Notification, then records the send for each recipient. The
+// Notification itself stays at the Notification Provider: Cadence keeps the
+// send's workflow run id, so it can mark their copy read once they open the
+// page it links to.
+async function sendAndRecord(
   db: Db,
   notification: NotificationSend,
   about: SentAbout,
@@ -360,12 +396,32 @@ async function send(
     .run();
 }
 
+// ─── Never breaking what caused it ───
+
+/**
+ * Runs `work`, and if it throws, logs `failure` with the error and gives
+ * undefined instead. Sending a Notification or marking one read never breaks
+ * the action that caused it or the page being opened.
+ */
+async function logInsteadOfThrowing<T>(
+  failure: string,
+  work: () => Promise<T>
+): Promise<T | undefined> {
+  try {
+    return await work();
+  } catch (error) {
+    console.error(failure, error);
+    return undefined;
+  }
+}
+
 // ─── One function per kind ───
 
 /**
  * Tells a Discussion Question's author that someone posted a Discussion Reply
- * to it. Call it once the reply is saved. It never throws: a failure is logged,
- * so the reply still gets posted. The provider defaults to the configured one.
+ * to it. Call it once the Discussion Reply is saved. It never throws: a
+ * failure is logged, so the Discussion Reply still gets posted. The provider
+ * defaults to the configured one.
  */
 export async function notifyDiscussionReply(
   db: Db,
@@ -373,48 +429,56 @@ export async function notifyDiscussionReply(
   discussionReplyId: number,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    const reply = getCommentWithAuthor(db, discussionReplyId);
-    if (!reply || reply.parentId === null) return;
+  await logInsteadOfThrowing(
+    `Couldn't send the Discussion Reply Notification for comment ${discussionReplyId}`,
+    async () => {
+      const discussionReply = getCommentWithAuthor(db, discussionReplyId);
+      if (!discussionReply || discussionReply.parentId === null) return;
 
-    const question = getCommentWithAuthor(db, reply.parentId);
-    const course = getCourse(db, courseId);
-    const lesson = getLesson(db, reply.lessonId);
-    if (!question || !course) return;
+      const discussionQuestion = getCommentWithAuthor(
+        db,
+        discussionReply.parentId
+      );
+      const course = getCourse(db, courseId);
+      if (!discussionQuestion || !course) return;
 
-    // The Instructor's own top-level comment isn't a Discussion Question, so a
-    // reply to it isn't a Discussion Reply.
-    if (question.authorId === course.instructorId) return;
+      // The Instructor's own top-level comment isn't a Discussion Question, so
+      // a comment answering it isn't a Discussion Reply.
+      if (discussionQuestion.author.id === course.instructorId) return;
 
-    // Nobody hears about their own action.
-    if (question.authorId === reply.authorId) return;
+      // Nobody hears about their own action.
+      if (discussionQuestion.author.id === discussionReply.author.id) return;
 
-    await send(
-      db,
-      {
-        kind: "discussion-reply",
-        recipients: [{ id: question.authorId, email: question.authorEmail }],
-        actor: { name: reply.authorName, avatarUrl: reply.authorAvatarUrl },
-        content: {
-          summary: discussionReplySummary(reply.authorName, course, lesson),
-          excerpt: reply.body,
-          context: course.title,
-          url: discussionLink(course, lesson, reply.id),
-          // The author's switch drops the email, and only the email.
-          email: question.authorEmailAndPopUps
-            ? discussionReplyEmail(question, reply, course, lesson)
-            : undefined,
+      const place = { course, lesson: getLesson(db, discussionReply.lessonId) };
+      await sendAndRecord(
+        db,
+        {
+          kind: "discussion-reply",
+          recipients: [asRecipient(discussionQuestion.author)],
+          actor: asActor(discussionReply.author),
+          content: {
+            summary: discussionSummary(
+              discussionReply.author.name,
+              " replied to your Discussion Question on ",
+              place
+            ),
+            excerpt: discussionReply.body,
+            context: course.title,
+            url: discussionLink(place, discussionReply.id),
+            // The author's switch drops the email, and only the email.
+            email: emailAndPopUpsOn(
+              "discussion-reply",
+              discussionQuestion.author.emailAndPopUps
+            )
+              ? discussionReplyEmail(discussionQuestion, discussionReply, place)
+              : undefined,
+          },
         },
-      },
-      { commentId: reply.id },
-      provider
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't send the Discussion Reply Notification for comment ${discussionReplyId}`,
-      error
-    );
-  }
+        { commentId: discussionReply.id },
+        provider
+      );
+    }
+  );
 }
 
 /**
@@ -429,48 +493,49 @@ export async function notifyDiscussionQuestion(
   discussionQuestionId: number,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    const question = getCommentWithAuthor(db, discussionQuestionId);
-    const course = getCourse(db, courseId);
-    if (!question || question.parentId !== null || !course) return;
+  await logInsteadOfThrowing(
+    `Couldn't send the Discussion Question Notification for comment ${discussionQuestionId}`,
+    async () => {
+      const discussionQuestion = getCommentWithAuthor(db, discussionQuestionId);
+      const course = getCourse(db, courseId);
+      if (!discussionQuestion || !course) return;
 
-    // The Instructor's own top-level comment isn't a Discussion Question, and
-    // nobody hears about their own action.
-    if (question.authorId === course.instructorId) return;
+      // A comment with a parent answers a Discussion Question instead.
+      if (discussionQuestion.parentId !== null) return;
 
-    const lesson = getLesson(db, question.lessonId);
-    const instructor = getRecipient(db, course.instructorId);
-    if (!instructor) return;
+      // The Instructor's own top-level comment isn't a Discussion Question, and
+      // nobody hears about their own action.
+      if (discussionQuestion.author.id === course.instructorId) return;
 
-    await send(
-      db,
-      {
-        kind: "discussion-question",
-        recipients: [instructor],
-        actor: {
-          name: question.authorName,
-          avatarUrl: question.authorAvatarUrl,
+      const instructor = getRecipient(db, course.instructorId);
+      if (!instructor) return;
+
+      const place = {
+        course,
+        lesson: getLesson(db, discussionQuestion.lessonId),
+      };
+      await sendAndRecord(
+        db,
+        {
+          kind: "discussion-question",
+          recipients: [instructor],
+          actor: asActor(discussionQuestion.author),
+          content: {
+            summary: discussionSummary(
+              discussionQuestion.author.name,
+              " asked a Discussion Question on ",
+              place
+            ),
+            excerpt: discussionQuestion.body,
+            context: course.title,
+            url: discussionLink(place, discussionQuestion.id),
+          },
         },
-        content: {
-          summary: discussionQuestionSummary(
-            question.authorName,
-            course,
-            lesson
-          ),
-          excerpt: question.body,
-          context: course.title,
-          url: discussionLink(course, lesson, question.id),
-        },
-      },
-      { commentId: question.id },
-      provider
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't send the Discussion Question Notification for comment ${discussionQuestionId}`,
-      error
-    );
-  }
+        { commentId: discussionQuestion.id },
+        provider
+      );
+    }
+  );
 }
 
 /**
@@ -484,48 +549,43 @@ export async function notifyOpenRefundRequest(
   refundRequestId: number,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    const refundRequest = getRefundRequestWithBuyer(db, refundRequestId);
-    if (!refundRequest) return;
+  await logInsteadOfThrowing(
+    `Couldn't send the Open Refund Request Notification for Refund Request ${refundRequestId}`,
+    async () => {
+      const refundRequest = getRefundRequestWithBuyer(db, refundRequestId);
+      if (!refundRequest) return;
 
-    // Nobody hears about their own action, even a Platform Admin who asks for
-    // their own money back.
-    const platformAdmins = getPlatformAdmins(db).filter(
-      (platformAdmin) => platformAdmin.id !== refundRequest.buyerId
-    );
-    if (platformAdmins.length === 0) return;
+      // Nobody hears about their own action, even a Platform Admin who asks for
+      // their own money back.
+      const platformAdmins = getPlatformAdmins(db).filter(
+        (platformAdmin) => platformAdmin.id !== refundRequest.buyer.id
+      );
+      if (platformAdmins.length === 0) return;
 
-    await send(
-      db,
-      {
-        kind: "open-refund-request",
-        recipients: platformAdmins,
-        actor: {
-          name: refundRequest.buyerName,
-          avatarUrl: refundRequest.buyerAvatarUrl,
+      await sendAndRecord(
+        db,
+        {
+          kind: "open-refund-request",
+          recipients: platformAdmins,
+          actor: asActor(refundRequest.buyer),
+          content: {
+            summary: openRefundRequestSummary(
+              refundRequest.buyer.name,
+              refundRequest.courseTitle,
+              refundRequest.amountPaid
+            ),
+            excerpt: refundRequest.reason,
+            context: refundRequest.courseTitle,
+            // The review page, which shows Open Refund Requests unless told
+            // otherwise.
+            url: "/admin/refunds",
+          },
         },
-        content: {
-          summary: openRefundRequestSummary(
-            refundRequest.buyerName,
-            refundRequest.courseTitle,
-            refundRequest.amountPaid
-          ),
-          excerpt: refundRequest.reason,
-          context: refundRequest.courseTitle,
-          // The review page, which shows Open Refund Requests unless told
-          // otherwise.
-          url: "/admin/refunds",
-        },
-      },
-      { refundRequestId: refundRequest.id },
-      provider
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't send the Open Refund Request Notification for Refund Request ${refundRequestId}`,
-      error
-    );
-  }
+        { refundRequestId: refundRequest.id },
+        provider
+      );
+    }
+  );
 }
 
 /**
@@ -539,44 +599,42 @@ export async function notifySeatClaimed(
   seatId: number,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    const seat = getClaimedSeat(db, seatId);
-    if (!seat) return;
+  await logInsteadOfThrowing(
+    `Couldn't send the Seat claimed Notification for Seat ${seatId}`,
+    async () => {
+      const seat = getClaimedSeat(db, seatId);
+      if (!seat) return;
 
-    // Nobody hears about their own action, so a Team Admin who claims one of
-    // their own Seats isn't told.
-    if (seat.studentId === seat.teamAdminId) return;
+      // Nobody hears about their own action, so a Team Admin who claims one of
+      // their own Seats isn't told.
+      if (seat.student.id === seat.teamAdminId) return;
 
-    const teamAdmin = getRecipient(db, seat.teamAdminId);
-    if (!teamAdmin) return;
+      const teamAdmin = getRecipient(db, seat.teamAdminId);
+      if (!teamAdmin) return;
 
-    await send(
-      db,
-      {
-        kind: "seat-claimed",
-        recipients: [teamAdmin],
-        actor: { name: seat.studentName, avatarUrl: seat.studentAvatarUrl },
-        content: {
-          summary: seatClaimedSummary(
-            seat.studentName,
-            seat.courseTitle,
-            countSeats(db, seat.teamLicenceId)
-          ),
-          excerpt: null,
-          context: seat.courseTitle,
-          url: "/team",
+      await sendAndRecord(
+        db,
+        {
+          kind: "seat-claimed",
+          recipients: [teamAdmin],
+          actor: asActor(seat.student),
+          content: {
+            summary: seatClaimedSummary(
+              seat.student.name,
+              seat.courseTitle,
+              countSeats(db, seat.teamLicenceId)
+            ),
+            excerpt: null,
+            context: seat.courseTitle,
+            url: "/team",
+          },
         },
-      },
-      // About the team page as a whole.
-      {},
-      provider
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't send the Seat claimed Notification for Seat ${seatId}`,
-      error
-    );
-  }
+        // About the team page as a whole.
+        {},
+        provider
+      );
+    }
+  );
 }
 
 /**
@@ -590,41 +648,41 @@ export async function notifyRefundRequestDecided(
   refundRequestId: number,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    const refundRequest = getRefundRequestWithBuyer(db, refundRequestId);
-    if (!refundRequest || refundRequest.status === RefundStatus.Open) return;
+  await logInsteadOfThrowing(
+    `Couldn't send the Refund Request decided Notification for Refund Request ${refundRequestId}`,
+    async () => {
+      const refundRequest = getRefundRequestWithBuyer(db, refundRequestId);
+      if (!refundRequest || refundRequest.status === RefundStatus.Open) return;
 
-    // Nobody hears about their own action, even a Platform Admin who decides
-    // their own Refund Request.
-    if (refundRequest.decidedById === refundRequest.buyerId) return;
+      // Nobody hears about their own action, even a Platform Admin who decides
+      // their own Refund Request.
+      if (refundRequest.decidedById === refundRequest.buyer.id) return;
 
-    await send(
-      db,
-      {
-        kind: "refund-request-decided",
-        recipients: [
-          { id: refundRequest.buyerId, email: refundRequest.buyerEmail },
-        ],
-        actor: null,
-        content: {
-          summary: refundRequestDecidedSummary(refundRequest),
-          excerpt: refundRequest.decisionNote,
-          context: refundRequest.courseTitle,
-          url: REFUND_REQUESTS_URL,
-          // Always, whatever the buyer's switch says: it carries the money
-          // details.
-          email: refundRequestDecidedEmail(refundRequest),
+      await sendAndRecord(
+        db,
+        {
+          kind: "refund-request-decided",
+          recipients: [asRecipient(refundRequest.buyer)],
+          actor: null,
+          content: {
+            summary: refundRequestDecidedSummary(refundRequest),
+            excerpt: refundRequest.decisionNote,
+            context: refundRequest.courseTitle,
+            url: REFUND_REQUESTS_URL,
+            // Refund Request decided ignores the switch, so this always goes.
+            email: emailAndPopUpsOn(
+              "refund-request-decided",
+              refundRequest.buyer.emailAndPopUps
+            )
+              ? refundRequestDecidedEmail(refundRequest)
+              : undefined,
+          },
         },
-      },
-      { refundRequestId: refundRequest.id },
-      provider
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't send the Refund Request decided Notification for Refund Request ${refundRequestId}`,
-      error
-    );
-  }
+        { refundRequestId: refundRequest.id },
+        provider
+      );
+    }
+  );
 }
 
 // ─── Connecting to the Notification Feed ───
@@ -639,17 +697,11 @@ export async function notificationFeedCredentials(
   userId: number,
   provider?: NotificationProvider
 ): Promise<FeedCredentials | null> {
-  try {
-    return await (provider ?? configuredNotificationProvider()).feedCredentials(
-      userId
-    );
-  } catch (error) {
-    console.error(
-      `Couldn't get the Notification Feed credentials for user ${userId}`,
-      error
-    );
-    return null;
-  }
+  const credentials = await logInsteadOfThrowing(
+    `Couldn't get the Notification Feed credentials for user ${userId}`,
+    () => (provider ?? configuredNotificationProvider()).feedCredentials(userId)
+  );
+  return credentials ?? null;
 }
 
 // ─── Marking read ───
@@ -662,54 +714,84 @@ export type LinkedPage =
   | { page: "lesson"; lessonId: number }
   /** The buyer's Refund Requests, in settings. */
   | { page: "refund-requests" }
-  | { page: "refund-request-review" }
+  | {
+      page: "refund-request-review";
+      /** The Refund Requests it shows. It shows one status at a time. */
+      refundRequestIds: number[];
+    }
   | { page: "team" };
 
-// Every page but the lesson shows everything its one kind of Notification is
-// about, so it marks all of them.
-const KIND_LINKING_TO = {
-  "refund-requests": "refund-request-decided",
-  "refund-request-review": "open-refund-request",
-  team: "seat-claimed",
-} satisfies Record<Exclude<LinkedPage["page"], "lesson">, NotificationKind>;
+// Opening a page waits at most this long for the Notification Provider,
+// however many Notifications it marks read. Tries still going after that
+// finish in the background.
+const MARK_READ_WAIT_MS = 1_000;
 
-// The person's own Notifications about the page, and nobody else's, that
-// Cadence hasn't had marked read yet.
+// Cadence asks the Notification Provider to mark a Notification read at most
+// this many times. Some can never be marked, such as one older than Knock's
+// message log, and those would otherwise be asked about on every visit.
+const MARK_READ_ATTEMPTS = 3;
+
+// The person's own Notifications about what the page shows, and nobody
+// else's, that Cadence hasn't had marked read yet and hasn't given up on.
 function findNotificationsToMark(db: Db, userId: number, page: LinkedPage) {
   const theirsToMark = and(
     eq(sentNotifications.recipientId, userId),
-    isNull(sentNotifications.markedReadAt)
+    isNull(sentNotifications.markedReadAt),
+    lt(sentNotifications.markReadAttempts, MARK_READ_ATTEMPTS)
   );
   const columns = {
     id: sentNotifications.id,
     workflowRunId: sentNotifications.workflowRunId,
   };
-
-  // Discussion Questions and Discussion Replies on that lesson.
-  if (page.page === "lesson") {
-    return db
+  const everyOne = (kind: NotificationKind) =>
+    db
       .select(columns)
       .from(sentNotifications)
-      .innerJoin(comments, eq(sentNotifications.commentId, comments.id))
-      .where(and(theirsToMark, eq(comments.lessonId, page.lessonId)))
+      .where(and(theirsToMark, eq(sentNotifications.kind, kind)))
       .all();
-  }
 
-  return db
-    .select(columns)
-    .from(sentNotifications)
-    .where(
-      and(theirsToMark, eq(sentNotifications.kind, KIND_LINKING_TO[page.page]))
-    )
-    .all();
+  switch (page.page) {
+    // Discussion Questions and Discussion Replies on that lesson.
+    case "lesson":
+      return db
+        .select(columns)
+        .from(sentNotifications)
+        .innerJoin(comments, eq(sentNotifications.commentId, comments.id))
+        .where(and(theirsToMark, eq(comments.lessonId, page.lessonId)))
+        .all();
+
+    // Only the Open Refund Requests it shows.
+    case "refund-request-review":
+      return db
+        .select(columns)
+        .from(sentNotifications)
+        .where(
+          and(
+            theirsToMark,
+            eq(sentNotifications.kind, "open-refund-request"),
+            inArray(sentNotifications.refundRequestId, page.refundRequestIds)
+          )
+        )
+        .all();
+
+    // It shows all the buyer's Refund Requests.
+    case "refund-requests":
+      return everyOne("refund-request-decided");
+
+    // Seat claimed is about the team page as a whole.
+    case "team":
+      return everyOne("seat-claimed");
+  }
 }
 
 /**
  * Marks the signed-in person's Notifications about a page read once they open
- * it, however they got there. Call it from the page's loader. The Notification
- * Provider is asked once per Notification. It never throws: a failure is
- * logged, so the page still opens, and what wasn't marked is tried again the
- * next time. The provider defaults to the configured one.
+ * it, however they got there. Call it from the page's loader. It asks the
+ * Notification Provider about them all at once, and waits for it at most a
+ * second, so the page never stalls. A Notification that's marked isn't asked
+ * about again, and one that isn't is tried again the next time, up to three
+ * tries. It never throws: a failure is logged, so the page still opens. The
+ * provider defaults to the configured one.
  */
 export async function markNotificationsRead(
   db: Db,
@@ -717,39 +799,63 @@ export async function markNotificationsRead(
   page: LinkedPage,
   provider?: NotificationProvider
 ): Promise<void> {
-  try {
-    for (const sent of findNotificationsToMark(db, userId, page)) {
-      await markOneRead(db, sent, userId, provider);
+  await logInsteadOfThrowing(
+    `Couldn't mark the Notifications on the ${page.page} page read for user ${userId}`,
+    async () => {
+      const toMark = findNotificationsToMark(db, userId, page);
+      if (toMark.length === 0) return;
+
+      const markingProvider = provider ?? configuredNotificationProvider();
+      countAttempts(db, toMark);
+      const marking = toMark.map((sent) =>
+        markOneRead(db, sent, userId, markingProvider)
+      );
+      await waitAtMost(MARK_READ_WAIT_MS, Promise.all(marking));
     }
-  } catch (error) {
-    console.error(
-      `Couldn't mark the Notifications on the ${page.page} page read for user ${userId}`,
-      error
-    );
-  }
+  );
+}
+
+// Counted as the tries start, so a try that never finishes counts too.
+function countAttempts(db: Db, toMark: { id: number }[]) {
+  const ids = toMark.map((sent) => sent.id);
+  db.update(sentNotifications)
+    .set({ markReadAttempts: sql`${sentNotifications.markReadAttempts} + 1` })
+    .where(inArray(sentNotifications.id, ids))
+    .run();
+}
+
+// Resolves once the work is done or `ms` have passed, whichever comes first.
+// The work carries on either way.
+function waitAtMost(ms: number, work: Promise<unknown>): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    work.then(done, done);
+  });
 }
 
 // Never throws, so one Notification that can't be marked doesn't stop the
-// rest. It's asked about again the next time.
+// rest. Unless that was its last try, it's asked about again the next time.
 async function markOneRead(
   db: Db,
   sent: { id: number; workflowRunId: string },
   userId: number,
-  provider: NotificationProvider | undefined
+  provider: NotificationProvider
 ): Promise<void> {
-  try {
-    await (provider ?? configuredNotificationProvider()).markRead({
-      workflowRunId: sent.workflowRunId,
-      userId,
-    });
-    db.update(sentNotifications)
-      .set({ markedReadAt: new Date().toISOString() })
-      .where(eq(sentNotifications.id, sent.id))
-      .run();
-  } catch (error) {
-    console.error(
-      `Couldn't mark the Notification from workflow run ${sent.workflowRunId} read for user ${userId}`,
-      error
-    );
-  }
+  await logInsteadOfThrowing(
+    `Couldn't mark the Notification from workflow run ${sent.workflowRunId} read for user ${userId}`,
+    async () => {
+      await provider.markRead({
+        workflowRunId: sent.workflowRunId,
+        userId,
+      });
+      db.update(sentNotifications)
+        .set({ markedReadAt: new Date().toISOString() })
+        .where(eq(sentNotifications.id, sent.id))
+        .run();
+    }
+  );
 }

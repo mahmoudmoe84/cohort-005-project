@@ -11,17 +11,18 @@ To use Knock, a person with access to Knock's and Postmark's dashboards does the
 
 ## 1. Environment variables
 
-| Variable                | Value                                                      | Notes                                                                                         |
-| ----------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `KNOCK_API_KEY`         | The environment's secret key (`sk_…`)                      | Server only. Setting it switches Cadence from the fake to Knock.                              |
-| `KNOCK_PUBLIC_API_KEY`  | The environment's public key (`pk_…`)                      | Sent to the browser. Cadence refuses a value that doesn't start with `pk_`.                   |
-| `KNOCK_FEED_CHANNEL_ID` | The in-app feed channel's id (a UUID)                      | Used by the server to find messages and by the browser to read the feed.                      |
-| `KNOCK_SIGNING_KEY`     | The environment's signing key                              | Signs the user token the browser shows Knock. Required once enhanced security is on (step 5). |
-| `APP_URL`               | Cadence's public origin, such as `https://cadence.example` | Notification email links are built from it. Without it they point at `http://localhost:5173`. |
+| Variable                | Value                                                      | Notes                                                                                           |
+| ----------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `KNOCK_API_KEY`         | The environment's secret key (`sk_…`)                      | Server only. Setting it switches Cadence from the fake to Knock.                                |
+| `KNOCK_PUBLIC_API_KEY`  | The environment's public key (`pk_…`)                      | Sent to the browser. Cadence refuses a value that doesn't start with `pk_`.                     |
+| `KNOCK_FEED_CHANNEL_ID` | The in-app feed channel's id (a UUID)                      | Used by the server to find messages and by the browser to read the feed.                        |
+| `KNOCK_SIGNING_KEY`     | The environment's signing key                              | Required. Signs the user token the browser shows Knock, which enhanced security needs (step 5). |
+| `APP_URL`               | Cadence's public origin, such as `https://cadence.example` | Notification email links are built from it. Without it they point at `http://localhost:5173`.   |
 
 - The keys and the signing key are under **Platform > API keys** in Knock's dashboard. Knock shows the signing key only once.
 - Use the base64 form of the signing key, which starts `LS0tLS1CRUdJTi`, so it fits on one line.
 - The signing key must be PKCS#8, so it decodes to `-----BEGIN PRIVATE KEY-----`. If it decodes to `-----BEGIN RSA PRIVATE KEY-----` (PKCS#1), convert it once with `openssl pkcs8 -topk8 -nocrypt -in key.pem`. Otherwise every page logs `Couldn't get the Notification Feed credentials` and shows no bell.
+- Without `KNOCK_SIGNING_KEY`, Cadence fails closed: it gives the browser no Notification Feed credentials, so there's no bell, and every page logs `Couldn't get the Notification Feed credentials` with the reason. Notifications are still sent and emailed.
 - Locally, put them in `.env`, which is gitignored; `npm run dev` loads it. In production, set them in the host's environment.
 
 ## 2. Email through Postmark
@@ -63,20 +64,16 @@ Cadence writes all the wording. Each workflow's templates only print fields Cade
 
 **Email step** (only in `refund-request-decided` and `discussion-reply`)
 
-- Step condition: `data.email_body` is not empty. Cadence leaves the email fields out when the person's switch is off, so the step is skipped and sends nothing.
-- Layout: **No layout**.
-- Subject: `{{ data.email_subject }}`
-- Text body: `{{ data.email_body }}`
-- HTML body, which Knock requires. It prints the same text:
+Spec #28 asks for plain-text email. Knock's email step needs an HTML body as well (open question 3), so the HTML part carries the same text and nothing else.
 
-  ```html
-  <!DOCTYPE html>
-  <html>
-    <body>
-      <pre style="white-space: pre-wrap; font-family: inherit">
-  {{ data.email_body | escape }}</pre>
-    </body>
-  </html>
+- Step condition: `data.email_body` is not empty. Cadence leaves the email fields out when the person's switch is off, so the step is skipped and sends nothing.
+- Layout: **No layout**, so Knock wraps nothing around either part.
+- Subject: `{{ data.email_subject }}`
+- Text body: `{{ data.email_body }}`, with no filter, so the text part is Cadence's plain-text body exactly.
+- HTML body: the same text with nothing added but line breaks. It has no styling, branding or layout. `escape` only keeps characters such as `<` showing as written.
+
+  ```liquid
+  {{ data.email_body | escape | newline_to_br }}
   ```
 
 These are the fields each trigger's `data` carries:
@@ -92,9 +89,9 @@ These are the fields each trigger's `data` carries:
 
 Recipients carry only the person's id and email address. Cadence doesn't use Knock's `actor` field, because Knock would show everything it holds about an actor, including their email address, to each recipient's browser.
 
-## 5. Production only
+## 5. Enhanced security, in every environment
 
-Turn on **enhanced security** under **Platform > API keys**, with `KNOCK_SIGNING_KEY` set. Without it, Knock's public key can read anyone's feed. Development can leave it off.
+Turn on **enhanced security** under **Platform > API keys**, in Development and in Production alike, with `KNOCK_SIGNING_KEY` set. Without it, Knock's public key can read anyone's feed, whatever Cadence does. Knock suggests Development can leave it off; Cadence doesn't, because the public key reaches every signed-in browser in both.
 
 ## 6. Check it in Development
 
@@ -111,24 +108,27 @@ Run Cadence against Knock Development, with the seed data (`npm run db:seed`). E
 Then check each of these:
 
 1. All five kinds arrive in the bell live, with a pop-up, while the recipient's page is open.
-2. Discussion Reply and Refund Request decided email reach the Postmark sandbox server, from `support@superhumanai.tech`, and read well as plain text.
+2. Discussion Reply and Refund Request decided email reach the Postmark sandbox server, from `support@superhumanai.tech`. Their text part is exactly the body Cadence sent, and their HTML part is that same text with only `<br />` added.
 3. Clicking a Notification, and "Mark all as read", mark them read in Knock's message log. "Mark all as read" must leave another person's Notifications unread: Knock's client scopes it with `user_ids`, which Knock's API reference doesn't list.
 4. Opening the page a Notification links to (from its email, say) marks it read in Knock.
 5. A DevUI user switch shows the new person's Notifications.
-6. The two open questions below. Record the results on issue #36.
+6. Enhanced security is on: Knock refuses `GET /v1/users/{user_id}/feeds/{channel_id}` sent with the public key and no user token.
+7. The three open questions below. Record the results on issue #36.
 
 ## Open questions
 
-Neither has been checked against a live Knock account. What Knock's docs and source say:
+None has been checked against a live Knock account. What Knock's docs and source say:
 
 1. **Does an open Notification Feed update live after Cadence marks a Notification read on the server?** Probably not. Knock's socket only sends `new-message`, and its JS client handles nothing else. So the next arrival brings the badge back in line, because its payload carries the counts, but the dots on Notifications already listed stay until the next navigation, when Cadence's bell looks at the newest page again.
 2. **Does the free plan require Knock branding when Knock's UI components aren't used?** Not for Cadence's own UI, as far as the docs go. The pricing page lists "Remove Knock branding" as not on the free plan without saying where the branding appears, and Knock's terms set no duty to show it. A `branding_required` flag in the feed settings drives the "Powered by Knock" footer of Knock's own React feed, which Cadence doesn't use. A Knock FAQ suggests Knock adds "Powered by Knock" to email. To check, read a sent email's HTML and text in the Postmark sandbox, and call `GET /v1/users/{user_id}/feeds/{channel_id}/settings`.
+3. **Can Knock send Notification email as plain text only?** Spec #28 asks for plain text with no HTML. Knock's email step requires an HTML body, and its docs describe no text-only email. Its Postmark channel takes a "Payload overrides" JSON, which might drop the HTML part, but nobody has checked. Until then, each email's HTML part is its text with line breaks. To check, try an override on the Development channel and see whether an email reaches the Postmark sandbox with a text part only.
 
 ## Known limits
 
-- Knock keeps its message log for 30 days on the free plan. Opening a page more than 30 days after its Notification can't mark it read on the server, and Cadence asks again each time that page opens.
-- Knock runs workflows asynchronously. A page opened in the moment after a send can come before the in-app message exists. Cadence then asks again the next time the page opens.
-- Knock always sends an HTML part with email, while spec #28 asks for plain text only. Whether a Postmark payload override can drop it isn't known.
-- The user token lasts an hour. Before it runs out, the browser asks `/api/notification-feed-credentials` for a fresh one.
+- Knock keeps its message log for 30 days on the free plan. Opening a page more than 30 days after its Notification can't mark it read on the server. Cadence gives up on it after three tries, so it stays unread in the bell until the person clicks it or marks all as read.
+- Knock runs workflows asynchronously. A page opened in the moment after a send can come before the in-app message exists. Cadence then asks again the next time the page opens, which uses one of the three tries.
+- Opening a page waits for Knock at most a second, however many Notifications it marks read. Marks that take longer finish in the background, and the bell shows them after the next navigation.
+- Until open question 3 is settled, Knock sends an HTML part with each email, while spec #28 asks for plain text only. That part is the text with line breaks, and nothing else.
+- The user token lasts an hour. Before it runs out, the browser asks `/api/notification-feed-credentials` for a fresh one. If Cadence can't sign one, the route answers 503 and the browser logs it. The bell then stops updating once the old token runs out, until the next full page load.
 - Knock's client drops the socket 30 seconds after the tab is hidden. Notifications that arrive meanwhile appear after the next navigation or with the next arrival.
 - Knock's client skips fetching an arrival while it's already fetching. The badge still counts it, but it doesn't pop up, and it joins the list at the next navigation.

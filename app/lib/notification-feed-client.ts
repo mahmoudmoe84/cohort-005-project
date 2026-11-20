@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { connectKnockNotificationFeed } from "~/lib/knock-notification-feed-client";
 import {
+  arrivalCallbacks,
   NOTIFICATION_KINDS,
+  summarySchema,
   type FeedCredentials,
   type Notification,
 } from "~/lib/notifications";
@@ -37,16 +39,19 @@ export interface NotificationFeedClient {
   disconnect(): void;
 }
 
-/** Builds the client for whichever provider issued the credentials. */
+/**
+ * Builds the client for whichever Notification Provider issued the
+ * credentials: the fake's when the fake did, and Knock's otherwise. It's the
+ * browser's one choice of adapter, as configuredNotificationProvider is the
+ * server's. Throws when the credentials aren't what that adapter expects.
+ */
 export function connectNotificationFeed(
   credentials: FeedCredentials
 ): NotificationFeedClient {
-  switch (credentials.provider) {
-    case "knock":
-      return connectKnockNotificationFeed(credentials);
-    case "fake":
-      return fakeNotificationFeedClient(credentials.userId);
-  }
+  const fake = fakeFeedCredentialsSchema.safeParse(credentials);
+  return fake.success
+    ? fakeNotificationFeedClient(fake.data.userId)
+    : connectKnockNotificationFeed(credentials);
 }
 
 // ─── The fake ───
@@ -56,15 +61,25 @@ export function connectNotificationFeed(
 const FAKE_FEED_URL = "/api/fake-notification-feed";
 const POLL_EVERY_MS = 3000;
 
+/**
+ * What the fake Notification Provider gives the browser to connect with,
+ * inside Cadence's opaque FeedCredentials. Only the two fakes know what's in
+ * it.
+ */
+const fakeFeedCredentialsSchema = z.object({
+  provider: z.literal("fake"),
+  userId: z.number().int(),
+});
+
+export type FakeFeedCredentials = z.infer<typeof fakeFeedCredentialsSchema>;
+
 const notificationSchema = z.object({
   id: z.string(),
   kind: z.enum(NOTIFICATION_KINDS),
   actor: z
     .object({ name: z.string(), avatarUrl: z.string().nullable() })
     .nullable(),
-  summary: z.array(
-    z.object({ text: z.string(), strong: z.boolean().optional() })
-  ),
+  summary: summarySchema,
   excerpt: z.string().nullable(),
   context: z.string(),
   url: z.string(),
@@ -79,7 +94,7 @@ const fakeFeedPageSchema = z.object({
 });
 
 function fakeNotificationFeedClient(userId: number): NotificationFeedClient {
-  const listeners = new Set<(notification: Notification) => void>();
+  const arrivals = arrivalCallbacks();
   const known = new Set<string>();
   let hasLooked = false;
   let connected = true;
@@ -104,25 +119,25 @@ function fakeNotificationFeedClient(userId: number): NotificationFeedClient {
     }
   }
 
-  // The first look only learns what's already there. After that, anything
-  // not seen before has just arrived.
-  function takeIn(notifications: Notification[]): Notification[] {
-    const arrivals = hasLooked
-      ? notifications.filter((notification) => !known.has(notification.id))
-      : [];
+  // Anything not seen before has just arrived, except on the first look,
+  // which only learns what's already there.
+  function arrivalsAmong(notifications: Notification[]): Notification[] {
+    if (!hasLooked) return [];
+    return notifications.filter((notification) => !known.has(notification.id));
+  }
+
+  function remember(notifications: Notification[]) {
     for (const notification of notifications) known.add(notification.id);
     hasLooked = true;
-    return arrivals;
   }
 
   async function lookForArrivals() {
     try {
       const page = await readPage();
-      const arrivals = takeIn(page.notifications).reverse();
+      const arrived = arrivalsAmong(page.notifications).reverse();
+      remember(page.notifications);
       if (!connected) return;
-      for (const notification of arrivals) {
-        for (const listener of listeners) listener(notification);
-      }
+      arrivals.arrived(arrived);
     } catch (error) {
       console.error("Couldn't poll the fake Notification Feed", error);
     }
@@ -136,7 +151,7 @@ function fakeNotificationFeedClient(userId: number): NotificationFeedClient {
       // The first page is what's already there, so none of it counts as
       // arriving. A page fetched later, after a navigation, leaves arrivals to
       // the poll, so they still pop up.
-      if (!hasLooked) takeIn(notifications);
+      if (!hasLooked) remember(notifications);
       return { notifications, nextCursor };
     },
 
@@ -152,17 +167,12 @@ function fakeNotificationFeedClient(userId: number): NotificationFeedClient {
       return post({ intent: "mark-all-read" });
     },
 
-    onArrival(callback) {
-      listeners.add(callback);
-      return () => {
-        listeners.delete(callback);
-      };
-    },
+    onArrival: arrivals.onArrival,
 
     disconnect() {
       connected = false;
       clearInterval(timer);
-      listeners.clear();
+      arrivals.clear();
     },
   };
 }

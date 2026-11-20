@@ -209,14 +209,14 @@ export async function action({ request }: Route.ActionArgs) {
   const access = await requireStaff(request, course.courseId);
 
   try {
-    const reply = createComment(
+    const discussionReply = createComment(
       access.userId!,
       question.lessonId,
       question.id,
       parsed.data.body
     );
-    // After the insert, so a failed send can't lose the reply.
-    await notifyDiscussionReply(db, course.courseId, reply.id);
+    // After the insert, so a failed send can't lose the Discussion Reply.
+    await notifyDiscussionReply(db, course.courseId, discussionReply.id);
   } catch (error) {
     if (error instanceof Error) {
       return { ok: false, error: error.message };

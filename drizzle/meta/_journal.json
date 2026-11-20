@@ -99,6 +99,13 @@
       "when": 1795207797915,
       "tag": "0013_superb_vector",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1795213643502,
+      "tag": "0014_rich_shockwave",
+      "breakpoints": true
     }
   ]
 }

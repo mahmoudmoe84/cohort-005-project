@@ -16,9 +16,11 @@ import { Bell, Settings } from "lucide-react";
 import { UserAvatar } from "~/components/user-avatar";
 import {
   connectNotificationFeed,
+  type NotificationFeedClient,
   type NotificationPage,
 } from "~/lib/notification-feed-client";
 import {
+  emailAndPopUpsOn,
   NOTIFICATION_SETTINGS_URL,
   type FeedCredentials,
   type Notification,
@@ -261,7 +263,16 @@ export function NotificationFeedProvider({
   });
 
   useEffect(() => {
-    const client = connectNotificationFeed(initialCredentials);
+    // The browser adapter turns down credentials it can't read. The bell then
+    // says it couldn't load the Notifications, rather than the page breaking.
+    let client: NotificationFeedClient;
+    try {
+      client = connectNotificationFeed(initialCredentials);
+    } catch (error) {
+      logFeedError(error);
+      dispatch({ type: "newest-page-failed" });
+      return;
+    }
     let connected = true;
     let countsAsked = 0;
     let loadingOlder = false;
@@ -406,16 +417,15 @@ function useNotificationFeed(): NotificationFeed {
 // ─── Live pop-ups ───
 
 // Nothing pops up over the open Notification Feed: the new Notification shows
-// at the top of the list instead. With the switch off, only Refund Request
-// decided pops up, because it carries the money details. A Notification that's
-// already read isn't news.
+// at the top of the list instead. With the switch off, only a kind that
+// ignores it pops up. A Notification that's already read isn't news.
 function popsUp(
   notification: Notification,
   emailAndPopUps: boolean,
   feedOpen: boolean
 ): boolean {
   if (feedOpen || notification.readAt !== null) return false;
-  return emailAndPopUps || notification.kind === "refund-request-decided";
+  return emailAndPopUpsOn(notification.kind, emailAndPopUps);
 }
 
 /** Pops the Notification up through the layout's Toaster and returns its id. */

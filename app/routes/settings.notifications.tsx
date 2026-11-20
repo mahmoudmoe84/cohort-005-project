@@ -148,8 +148,8 @@ export default function NotificationSettings({
             </Switch.Root>
           </label>
           <p className="text-xs text-muted-foreground">
-            Refund decisions always reach you by email and pop-up, because they
-            carry the money details.
+            Refund Request decisions always reach you by email and pop-up,
+            because they carry the money details.
           </p>
         </CardContent>
       </Card>

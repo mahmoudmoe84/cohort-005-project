@@ -6,7 +6,10 @@ import Knock, {
 } from "@knocklabs/client";
 import { z } from "zod";
 import {
+  arrivalCallbacks,
+  NOTIFICATION_FEED_PAGE_SIZE,
   NOTIFICATION_KINDS,
+  summarySchema,
   type FeedCredentials,
   type Notification,
 } from "~/lib/notifications";
@@ -22,7 +25,23 @@ import type {
 // Knock directly and hears about arrivals over Knock's socket, and it hands
 // Cadence its own Notification type, never Knock's feed items.
 
-type KnockFeedCredentials = Extract<FeedCredentials, { provider: "knock" }>;
+/**
+ * What Knock's server adapter gives the browser to connect with, inside
+ * Cadence's opaque FeedCredentials. Only the two Knock adapters know what's
+ * in it.
+ */
+const knockFeedCredentialsSchema = z.object({
+  /** The person's id, as Knock knows them. */
+  userId: z.string(),
+  /** Knock's public API key, which is safe in the browser. */
+  publicApiKey: z.string(),
+  /** The id of Knock's in-app feed channel. */
+  feedChannelId: z.string(),
+  /** Proves to Knock who the browser is acting for. */
+  userToken: z.string(),
+});
+
+export type KnockFeedCredentials = z.infer<typeof knockFeedCredentialsSchema>;
 
 /**
  * The part of a workflow trigger's data that comes back on each feed item:
@@ -32,18 +51,13 @@ const knockNotificationDataSchema = z.object({
   kind: z.enum(NOTIFICATION_KINDS),
   actor_name: z.string().nullish(),
   actor_avatar_url: z.string().nullish(),
-  summary: z.array(
-    z.object({ text: z.string(), strong: z.boolean().optional() })
-  ),
+  summary: summarySchema,
   excerpt: z.string().nullish(),
   context: z.string(),
   url: z.string(),
 });
 
 export type KnockNotificationData = z.infer<typeof knockNotificationDataSchema>;
-
-// The same page size as the fake.
-const PAGE_SIZE = 20;
 
 // Knock's feed client skips a fetch asked for while another is in flight, so
 // fetchPage waits its turn, and tries again if another fetch got in first.
@@ -53,24 +67,28 @@ const FETCH_ATTEMPTS = 3;
 const FEED_CREDENTIALS_URL = "/api/notification-feed-credentials";
 
 const freshCredentialsSchema = z.object({
-  credentials: z.object({
-    provider: z.literal("knock"),
-    userId: z.string(),
-    userToken: z.string(),
-  }),
+  credentials: knockFeedCredentialsSchema,
 });
 
 // Knock asks for this shortly before the user token runs out. Cadence signs a
-// new one for whoever is signed in, which has to be the same person.
+// new one for whoever is signed in, which has to be the same person. It never
+// throws. When Cadence can't give a token, as with the 503 it answers while
+// the Notification Provider fails, it logs why and gives none, and Knock
+// keeps the old token until it runs out.
 async function freshUserToken(userId: string): Promise<string | undefined> {
   try {
     const response = await fetch(FEED_CREDENTIALS_URL);
-    if (!response.ok) return undefined;
-    const fresh = freshCredentialsSchema.safeParse(await response.json());
-    if (!fresh.success || fresh.data.credentials.userId !== userId) {
+    if (!response.ok) {
+      console.error(
+        `Couldn't get a fresh Knock user token: Cadence answered ${response.status}`
+      );
       return undefined;
     }
-    return fresh.data.credentials.userToken;
+    const { credentials } = freshCredentialsSchema.parse(await response.json());
+    // A different person is signed in now, as after a DevUI user switch in
+    // another tab, and their token mustn't reach this person's client.
+    if (credentials.userId !== userId) return undefined;
+    return credentials.userToken;
   } catch (error) {
     console.error("Couldn't get a fresh Knock user token", error);
     return undefined;
@@ -92,25 +110,26 @@ function settled(feed: Feed): Promise<void> {
   });
 }
 
-/** Builds the client from the credentials Knock's server adapter issued. */
+/**
+ * Builds the client from the credentials Knock's server adapter issued.
+ * Throws when they aren't Knock's.
+ */
 export function connectKnockNotificationFeed(
-  credentials: KnockFeedCredentials
+  credentials: FeedCredentials
 ): NotificationFeedClient {
-  const knock = new Knock(credentials.publicApiKey);
-  knock.authenticate(
-    { id: credentials.userId },
-    credentials.userToken ?? undefined,
-    {
-      // Cadence's server registers people with Knock when it sends to them,
-      // so the browser doesn't.
-      identificationStrategy: "skip",
-      onUserTokenExpiring: () => freshUserToken(credentials.userId),
-    }
-  );
+  const { userId, publicApiKey, feedChannelId, userToken } =
+    knockFeedCredentialsSchema.parse(credentials);
+  const knock = new Knock(publicApiKey);
+  knock.authenticate({ id: userId }, userToken, {
+    // Cadence's server registers people with Knock when it sends to them,
+    // so the browser doesn't.
+    identificationStrategy: "skip",
+    onUserTokenExpiring: () => freshUserToken(userId),
+  });
   // Rich mode keeps the summary's parts in each item's data. Knock's default,
   // compact, drops arrays and objects from it.
-  const feed = knock.feeds.initialize(credentials.feedChannelId, {
-    page_size: PAGE_SIZE,
+  const feed = knock.feeds.initialize(feedChannelId, {
+    page_size: NOTIFICATION_FEED_PAGE_SIZE,
     mode: "rich",
   });
 
@@ -118,7 +137,7 @@ export function connectKnockNotificationFeed(
   const handedOut = new Map<string, FeedItem>();
   // Items that aren't Cadence's, so they're only warned about once.
   const skipped = new Set<string>();
-  const listeners = new Set<(notification: Notification) => void>();
+  const arrivals = arrivalCallbacks();
   let listening = false;
   // The pages being fetched, which unreadCount waits for.
   const fetching = new Set<Promise<unknown>>();
@@ -151,9 +170,10 @@ export function connectKnockNotificationFeed(
     };
   }
 
-  // Remembers each item, and leaves out any that isn't a Cadence
-  // Notification, such as a test sent from Knock's dashboard.
-  function takeIn(items: FeedItem[]): Notification[] {
+  // Turns Knock's items into the Notifications this client hands out, and
+  // remembers each item in handedOut. Leaves out any item that isn't a
+  // Cadence Notification, such as a test sent from Knock's dashboard.
+  function handOut(items: FeedItem[]): Notification[] {
     const notifications: Notification[] = [];
     for (const item of items) {
       const notification = toNotification(item);
@@ -173,10 +193,8 @@ export function connectKnockNotificationFeed(
   // Knock fetches what arrived after the newest item it holds and lists it
   // newest first. Call back oldest first, as they arrived.
   function onRealtime({ items }: FeedEventPayload) {
-    const arrivals = takeIn(items.filter((item) => !handedOut.has(item.id)));
-    for (const notification of arrivals.reverse()) {
-      for (const listener of listeners) listener(notification);
-    }
+    const arrived = handOut(items.filter((item) => !handedOut.has(item.id)));
+    arrivals.arrived(arrived.reverse());
   }
   feed.on("items.received.realtime", onRealtime);
 
@@ -219,7 +237,7 @@ export function connectKnockNotificationFeed(
       const { items, nextCursor } = await page.finally(() => {
         fetching.delete(page);
       });
-      const notifications = takeIn(items);
+      const notifications = handOut(items);
       // Listen only once the newest page is in. Before that Knock holds no
       // items, so its first live fetch would bring the whole newest page as
       // if it had just arrived.
@@ -272,15 +290,10 @@ export function connectKnockNotificationFeed(
       }
     },
 
-    onArrival(callback) {
-      listeners.add(callback);
-      return () => {
-        listeners.delete(callback);
-      };
-    },
+    onArrival: arrivals.onArrival,
 
     disconnect() {
-      listeners.clear();
+      arrivals.clear();
       feed.dispose();
       // Closes the socket and stops the user token's refresh timer.
       knock.logout();

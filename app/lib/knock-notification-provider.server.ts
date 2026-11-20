@@ -1,9 +1,13 @@
 import Knock, { signUserToken } from "@knocklabs/node";
-import type { KnockNotificationData } from "~/lib/knock-notification-feed-client";
 import type {
-  FeedCredentials,
-  NotificationActor,
-  NotificationKind,
+  KnockFeedCredentials,
+  KnockNotificationData,
+} from "~/lib/knock-notification-feed-client";
+import {
+  summaryText,
+  type FeedCredentials,
+  type NotificationActor,
+  type NotificationKind,
 } from "~/lib/notifications";
 import type {
   NotificationContent,
@@ -25,8 +29,9 @@ export type KnockSettings = {
   /** KNOCK_FEED_CHANNEL_ID: the id of the in-app feed channel. */
   feedChannelId: string;
   /**
-   * KNOCK_SIGNING_KEY: signs the user tokens the browser shows Knock. Knock
-   * needs them once its enhanced security is on.
+   * KNOCK_SIGNING_KEY: signs the user tokens the browser shows Knock. Knock's
+   * enhanced security, which is on in every environment, turns away a
+   * browser without one. Without the key, feedCredentials fails closed.
    */
   signingKey: string | null;
 };
@@ -74,7 +79,7 @@ function triggerData(
     actor_name: actor?.name ?? null,
     actor_avatar_url: actor?.avatarUrl ?? null,
     summary: content.summary,
-    summary_text: content.summary.map((part) => part.text).join(""),
+    summary_text: summaryText(content.summary),
     excerpt: content.excerpt,
     context: content.context,
     url: content.url,
@@ -111,21 +116,31 @@ export function createKnockNotificationProvider(
       return workflow_run_id;
     },
 
+    // Fails closed. A browser with no signed user token only gets in while
+    // Knock's enhanced security is off, and then Knock's public key can read
+    // anyone's feed. So without the signing key, Cadence gives the browser
+    // nothing to connect with, and the page opens without the bell.
     async feedCredentials(userId): Promise<FeedCredentials> {
+      if (settings.signingKey === null) {
+        throw new Error(
+          "KNOCK_SIGNING_KEY isn't set, so Cadence can't sign the user token " +
+            "Knock's enhanced security needs, and gives the browser no " +
+            "Notification Feed credentials. See docs/knock-setup.md."
+        );
+      }
+
+      // What Knock's browser adapter parses back out.
       const knockUserId = String(userId);
-      return {
-        provider: "knock",
+      const credentials: KnockFeedCredentials = {
         userId: knockUserId,
         publicApiKey: settings.publicApiKey,
         feedChannelId: settings.feedChannelId,
-        userToken:
-          settings.signingKey === null
-            ? null
-            : await signUserToken(knockUserId, {
-                signingKey: settings.signingKey,
-                expiresInSeconds: USER_TOKEN_SECONDS,
-              }),
+        userToken: await signUserToken(knockUserId, {
+          signingKey: settings.signingKey,
+          expiresInSeconds: USER_TOKEN_SECONDS,
+        }),
       };
+      return credentials;
     },
 
     // Only finds the in-app message while Knock still keeps its message log,
