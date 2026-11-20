@@ -1,5 +1,8 @@
 import Knock, { signUserToken } from "@knocklabs/node";
-import type { KnockNotificationData } from "~/lib/knock-notification-feed-client";
+import type {
+  KnockFeedCredentials,
+  KnockNotificationData,
+} from "~/lib/knock-notification-feed-client";
 import type {
   FeedCredentials,
   NotificationActor,
@@ -125,9 +128,9 @@ export function createKnockNotificationProvider(
         );
       }
 
+      // What Knock's browser adapter parses back out.
       const knockUserId = String(userId);
-      return {
-        provider: "knock",
+      const credentials: KnockFeedCredentials = {
         userId: knockUserId,
         publicApiKey: settings.publicApiKey,
         feedChannelId: settings.feedChannelId,
@@ -136,6 +139,7 @@ export function createKnockNotificationProvider(
           expiresInSeconds: USER_TOKEN_SECONDS,
         }),
       };
+      return credentials;
     },
 
     // Only finds the in-app message while Knock still keeps its message log,

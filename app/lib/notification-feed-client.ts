@@ -37,16 +37,19 @@ export interface NotificationFeedClient {
   disconnect(): void;
 }
 
-/** Builds the client for whichever provider issued the credentials. */
+/**
+ * Builds the client for whichever Notification Provider issued the
+ * credentials: the fake's when the fake did, and Knock's otherwise. It's the
+ * browser's one choice of adapter, as configuredNotificationProvider is the
+ * server's. Throws when the credentials aren't what that adapter expects.
+ */
 export function connectNotificationFeed(
   credentials: FeedCredentials
 ): NotificationFeedClient {
-  switch (credentials.provider) {
-    case "knock":
-      return connectKnockNotificationFeed(credentials);
-    case "fake":
-      return fakeNotificationFeedClient(credentials.userId);
-  }
+  const fake = fakeFeedCredentialsSchema.safeParse(credentials);
+  return fake.success
+    ? fakeNotificationFeedClient(fake.data.userId)
+    : connectKnockNotificationFeed(credentials);
 }
 
 // ─── The fake ───
@@ -55,6 +58,18 @@ export function connectNotificationFeed(
 
 const FAKE_FEED_URL = "/api/fake-notification-feed";
 const POLL_EVERY_MS = 3000;
+
+/**
+ * What the fake Notification Provider gives the browser to connect with,
+ * inside Cadence's opaque FeedCredentials. Only the two fakes know what's in
+ * it.
+ */
+const fakeFeedCredentialsSchema = z.object({
+  provider: z.literal("fake"),
+  userId: z.number().int(),
+});
+
+export type FakeFeedCredentials = z.infer<typeof fakeFeedCredentialsSchema>;
 
 const notificationSchema = z.object({
   id: z.string(),

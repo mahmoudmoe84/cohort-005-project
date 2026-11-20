@@ -22,7 +22,23 @@ import type {
 // Knock directly and hears about arrivals over Knock's socket, and it hands
 // Cadence its own Notification type, never Knock's feed items.
 
-type KnockFeedCredentials = Extract<FeedCredentials, { provider: "knock" }>;
+/**
+ * What Knock's server adapter gives the browser to connect with, inside
+ * Cadence's opaque FeedCredentials. Only the two Knock adapters know what's
+ * in it.
+ */
+const knockFeedCredentialsSchema = z.object({
+  /** The person's id, as Knock knows them. */
+  userId: z.string(),
+  /** Knock's public API key, which is safe in the browser. */
+  publicApiKey: z.string(),
+  /** The id of Knock's in-app feed channel. */
+  feedChannelId: z.string(),
+  /** Proves to Knock who the browser is acting for. */
+  userToken: z.string(),
+});
+
+export type KnockFeedCredentials = z.infer<typeof knockFeedCredentialsSchema>;
 
 /**
  * The part of a workflow trigger's data that comes back on each feed item:
@@ -53,11 +69,7 @@ const FETCH_ATTEMPTS = 3;
 const FEED_CREDENTIALS_URL = "/api/notification-feed-credentials";
 
 const freshCredentialsSchema = z.object({
-  credentials: z.object({
-    provider: z.literal("knock"),
-    userId: z.string(),
-    userToken: z.string(),
-  }),
+  credentials: knockFeedCredentialsSchema,
 });
 
 // Knock asks for this shortly before the user token runs out. Cadence signs a
@@ -100,20 +112,25 @@ function settled(feed: Feed): Promise<void> {
   });
 }
 
-/** Builds the client from the credentials Knock's server adapter issued. */
+/**
+ * Builds the client from the credentials Knock's server adapter issued.
+ * Throws when they aren't Knock's.
+ */
 export function connectKnockNotificationFeed(
-  credentials: KnockFeedCredentials
+  credentials: FeedCredentials
 ): NotificationFeedClient {
-  const knock = new Knock(credentials.publicApiKey);
-  knock.authenticate({ id: credentials.userId }, credentials.userToken, {
+  const { userId, publicApiKey, feedChannelId, userToken } =
+    knockFeedCredentialsSchema.parse(credentials);
+  const knock = new Knock(publicApiKey);
+  knock.authenticate({ id: userId }, userToken, {
     // Cadence's server registers people with Knock when it sends to them,
     // so the browser doesn't.
     identificationStrategy: "skip",
-    onUserTokenExpiring: () => freshUserToken(credentials.userId),
+    onUserTokenExpiring: () => freshUserToken(userId),
   });
   // Rich mode keeps the summary's parts in each item's data. Knock's default,
   // compact, drops arrays and objects from it.
-  const feed = knock.feeds.initialize(credentials.feedChannelId, {
+  const feed = knock.feeds.initialize(feedChannelId, {
     page_size: PAGE_SIZE,
     mode: "rich",
   });

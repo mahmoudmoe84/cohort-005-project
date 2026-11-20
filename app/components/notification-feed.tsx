@@ -16,6 +16,7 @@ import { Bell, Settings } from "lucide-react";
 import { UserAvatar } from "~/components/user-avatar";
 import {
   connectNotificationFeed,
+  type NotificationFeedClient,
   type NotificationPage,
 } from "~/lib/notification-feed-client";
 import {
@@ -261,7 +262,16 @@ export function NotificationFeedProvider({
   });
 
   useEffect(() => {
-    const client = connectNotificationFeed(initialCredentials);
+    // The browser adapter turns down credentials it can't read. The bell then
+    // says it couldn't load the Notifications, rather than the page breaking.
+    let client: NotificationFeedClient;
+    try {
+      client = connectNotificationFeed(initialCredentials);
+    } catch (error) {
+      logFeedError(error);
+      dispatch({ type: "newest-page-failed" });
+      return;
+    }
     let connected = true;
     let countsAsked = 0;
     let loadingOlder = false;

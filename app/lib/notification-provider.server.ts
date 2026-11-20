@@ -6,6 +6,7 @@ import type {
   NotificationKind,
   SummaryPart,
 } from "~/lib/notifications";
+import type { FakeFeedCredentials } from "~/lib/notification-feed-client";
 import { outboxTransport, type MailTransport } from "~/lib/mailer.server";
 import { configuredKnockNotificationProvider } from "~/lib/knock-notification-provider.server";
 
@@ -156,8 +157,10 @@ export function createFakeNotificationProvider(
       return workflowRunId;
     },
 
+    // What the fake browser client parses back out.
     async feedCredentials(userId) {
-      return { provider: "fake", userId };
+      const credentials: FakeFeedCredentials = { provider: "fake", userId };
+      return credentials;
     },
 
     async markRead({ workflowRunId, userId }) {

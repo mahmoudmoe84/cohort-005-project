@@ -37,20 +37,10 @@ export type Notification = {
 export const NOTIFICATION_SETTINGS_URL = "/settings/notifications";
 
 /**
- * What the browser needs to connect to one person's Notification Feed. Cadence
- * hands it from the Notification Provider to the browser untouched: only the
- * browser adapter for that provider reads inside it.
+ * What the browser needs to connect to one person's Notification Feed. The
+ * Notification Provider's server adapter makes it, and the matching browser
+ * adapter parses it with zod. Everything in between, the layout included,
+ * passes it on without reading inside it, so its type says nothing about
+ * what's there (ADR 0013).
  */
-export type FeedCredentials =
-  | { provider: "fake"; userId: number }
-  | {
-      provider: "knock";
-      /** The person's id, as Knock knows them. */
-      userId: string;
-      /** Knock's public API key, which is safe in the browser. */
-      publicApiKey: string;
-      /** The id of Knock's in-app feed channel. */
-      feedChannelId: string;
-      /** Proves to Knock who the browser is acting for. */
-      userToken: string;
-    };
+export type FeedCredentials = object;
