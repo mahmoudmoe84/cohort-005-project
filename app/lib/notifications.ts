@@ -20,6 +20,11 @@ export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 /** One run of a Notification's summary. Names are strong. */
 export type SummaryPart = { text: string; strong?: boolean };
 
+/** A summary as plain text, with nothing strong. */
+export function summaryText(summary: SummaryPart[]): string {
+  return summary.map((part) => part.text).join("");
+}
+
 /** Who did the thing. A null actor means Cadence itself. */
 export type NotificationActor = { name: string; avatarUrl: string | null };
 

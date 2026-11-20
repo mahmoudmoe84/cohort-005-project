@@ -15,6 +15,7 @@ import {
 } from "~/db/schema";
 import {
   NOTIFICATION_SETTINGS_URL,
+  summaryText,
   type FeedCredentials,
   type NotificationKind,
   type SummaryPart,
@@ -164,26 +165,16 @@ type Lesson = { id: number; title: string };
 // Discussion Questions and Discussion Replies live on a lesson. If the lesson
 // has gone, the Notification names the course and links to the course page.
 
-function discussionQuestionSummary(
-  askerName: string,
+// Who did what, on which lesson.
+function discussionSummary(
+  authorName: string,
+  didWhat: string,
   course: Course,
   lesson: Lesson | undefined
 ): SummaryPart[] {
   return [
-    { text: askerName, strong: true },
-    { text: " asked a Discussion Question on " },
-    { text: lesson?.title ?? course.title, strong: true },
-  ];
-}
-
-function discussionReplySummary(
-  replierName: string,
-  course: Course,
-  lesson: Lesson | undefined
-): SummaryPart[] {
-  return [
-    { text: replierName, strong: true },
-    { text: " replied to your Discussion Question on " },
+    { text: authorName, strong: true },
+    { text: didWhat },
     { text: lesson?.title ?? course.title, strong: true },
   ];
 }
@@ -273,13 +264,16 @@ function seatClaimedSummary(
 const REFUND_REQUESTS_URL = "/settings#refund-requests";
 
 // Signed by Cadence, not the Platform Admin. An approval says what's on its
-// way back: the Refund, which is always the full amount the buyer paid.
-function refundRequestDecidedSummary(
-  refundRequest: RefundRequestWithBuyer
+// way back: the Refund, which is always the full amount the buyer paid. The
+// in-app summary and the email say it the same way, each naming the course
+// in its own style.
+function refundRequestDecision(
+  refundRequest: RefundRequestWithBuyer,
+  course: SummaryPart
 ): SummaryPart[] {
   const yourRefundRequest: SummaryPart[] = [
     { text: "Your Refund Request for " },
-    { text: refundRequest.courseTitle, strong: true },
+    course,
   ];
 
   if (refundRequest.status !== RefundStatus.Approved) {
@@ -294,6 +288,16 @@ function refundRequestDecidedSummary(
   ];
 }
 
+// The course in bold.
+function refundRequestDecidedSummary(
+  refundRequest: RefundRequestWithBuyer
+): SummaryPart[] {
+  return refundRequestDecision(refundRequest, {
+    text: refundRequest.courseTitle,
+    strong: true,
+  });
+}
+
 // Plain text, like Cadence's other transactional email. The switch can't stop
 // this email, so unlike the Discussion Reply email it has no footer pointing
 // at Notification settings.
@@ -303,9 +307,10 @@ function refundRequestDecidedEmail(
   const { courseTitle, decisionNote } = refundRequest;
   const approved = refundRequest.status === RefundStatus.Approved;
 
-  const decision = approved
-    ? `Your Refund Request for "${courseTitle}" was approved. ${formatPrice(refundRequest.amountPaid)} is on its way back to you.`
-    : `Your Refund Request for "${courseTitle}" was declined.`;
+  // The course in quotes.
+  const decision = summaryText(
+    refundRequestDecision(refundRequest, { text: `"${courseTitle}"` })
+  );
   const note = decisionNote ? ["", decisionNote] : [];
   const whatNext = approved
     ? []
@@ -429,8 +434,9 @@ export async function notifyDiscussionReply(
             avatarUrl: discussionReply.authorAvatarUrl,
           },
           content: {
-            summary: discussionReplySummary(
+            summary: discussionSummary(
               discussionReply.authorName,
+              " replied to your Discussion Question on ",
               course,
               lesson
             ),
@@ -495,8 +501,9 @@ export async function notifyDiscussionQuestion(
             avatarUrl: discussionQuestion.authorAvatarUrl,
           },
           content: {
-            summary: discussionQuestionSummary(
+            summary: discussionSummary(
               discussionQuestion.authorName,
+              " asked a Discussion Question on ",
               course,
               lesson
             ),

@@ -3,10 +3,11 @@ import type {
   KnockFeedCredentials,
   KnockNotificationData,
 } from "~/lib/knock-notification-feed-client";
-import type {
-  FeedCredentials,
-  NotificationActor,
-  NotificationKind,
+import {
+  summaryText,
+  type FeedCredentials,
+  type NotificationActor,
+  type NotificationKind,
 } from "~/lib/notifications";
 import type {
   NotificationContent,
@@ -78,7 +79,7 @@ function triggerData(
     actor_name: actor?.name ?? null,
     actor_avatar_url: actor?.avatarUrl ?? null,
     summary: content.summary,
-    summary_text: content.summary.map((part) => part.text).join(""),
+    summary_text: summaryText(content.summary),
     excerpt: content.excerpt,
     context: content.context,
     url: content.url,
