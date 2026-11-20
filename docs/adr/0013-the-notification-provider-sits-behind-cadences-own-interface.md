@@ -2,7 +2,10 @@
 
 Cadence uses Knock as its Notification Provider, but we want to be able to replace it on price or features by writing one new adapter and changing nothing else. So no Cadence code imports Knock outside two adapter files. Instead it uses two interfaces that Cadence owns, modelled on `MailTransport` in `app/lib/mailer.server.ts`:
 
-- **Server: `NotificationProvider`.** It has two methods. `send({ kind, recipients: [{ id, email }], actor, content })` sends one Notification, and the provider registers each recipient from the send itself, so there is no separate call for that. `feedCredentials(userId)` returns a blob the browser adapter needs to connect (for Knock: the signed user token, the public key and the feed channel id). Cadence's code never reads inside it.
+- **Server: `NotificationProvider`.** It has three methods.
+  - `send({ kind, recipients: [{ id, email }], actor, content })` sends one Notification and returns its workflow run id. The provider registers each recipient from the send itself, so there is no separate call for that.
+  - `feedCredentials(userId)` returns a blob the browser adapter needs to connect (for Knock: the signed user token, the public key and the feed channel id).
+  - `markRead({ workflowRunId, userId })` marks read what that send put in that person's Notification Feed, and nobody else's.
 - **Browser: `NotificationFeedClient`.** It has six methods: `fetchPage(cursor?)` → `{ notifications, nextCursor }`, `unreadCount`, `markRead(id)`, `markAllRead()`, `onArrival(callback)` and `disconnect()`. The Knock adapter uses Knock's headless JS client and connects to Knock directly. It returns Cadence's own `Notification` type (`id`, `kind`, `actor`, `summary`, `excerpt`, `context`, `url`, `insertedAt`, `readAt`), not Knock's feed item. The component that provides the feed is keyed on the current person's id, so a DevUI user switch disconnects the old client and builds a new one.
 
 The decisions that keep the provider replaceable:
@@ -10,14 +13,24 @@ The decisions that keep the provider replaceable:
 - **Cadence writes all the wording.** Cadence writes each Notification's text, link and email subject and body from its kind and data, and sends the provider finished text. Knock's templates only print the fields they are given, so a swap leaves no messages behind and the wording can be unit-tested.
 - **The switch lives in Cadence's database.** The provider never sees it. When the switch is off, Cadence asks for in-app only, unless the kind is Refund Request decided. The browser reads the switch from loader data to decide whether to show the live pop-up.
 - **Mapping kinds is the adapter's job.** Cadence owns the list of kinds. The Knock adapter maps each kind to its own Knock workflow, so grouping can be added per kind later.
-- **A failed send never blocks the action that caused it.** `send` logs the error and returns, and the action still succeeds. Nothing is retried or queued.
+- **The feed credentials are opaque.** The server adapter makes them and the browser adapter parses them. Everything in between, the layout included, passes them on without reading inside, so the shared type names no provider's fields. Each side chooses its adapter in one place: `configuredNotificationProvider` on the server and `connectNotificationFeed` in the browser. Credentials can run out, as Knock's user token does after an hour, so the browser adapter asks `api/notification-feed-credentials` for fresh ones before then. That route answers 503 when the provider can't give them.
+- **Notifications live at the provider.** Cadence keeps no copy of them. For `markRead` it keeps one row per send per recipient in `sent_notifications`: the person, the kind, what it's about (a comment or a Refund Request), the workflow run id and when it was sent. We accept that past Notifications are lost on a swap.
+- **Opening a page marks its Notifications read.** However the person got there, the page's loader asks the provider to mark that person's Notifications about what the page shows read. This costs no extra messages, so Knock's open and link tracking stay off. It never stalls the page:
+  - It asks about all of them at once and waits at most a second in all. Tries that take longer finish in the background.
+  - `marked_read_at` records a success, so Cadence doesn't ask about that one again.
+  - A try that fails or doesn't finish is asked again on the next visit, up to three tries in all, counted in `mark_read_attempts`. Then Cadence gives up, because some can never be marked, such as one older than Knock's 30-day message log. The rule only counts tries, so it holds for any provider.
+- **A failed send never blocks the action that caused it.** Cadence logs the error, and the action still succeeds. Nothing is retried or queued. A failed mark-read is logged the same way, and the page still opens.
 - **Dev and tests use a fake.** When `KNOCK_API_KEY` is unset, a fake provider stores Notifications in memory, and email it is asked for goes to `.outbox/`. A fake browser client polls a dev-only Cadence route, so the bell works with no Knock account.
 
 ## Considered Options
 
 - **The browser only talks to Cadence, and the server proxies the feed.** Rejected: live arrivals would need Cadence to run its own push channel (for example SSE) and to find out about new arrivals itself, which is a relay we don't otherwise need.
 - **Knock's ready-made React components and dashboard templates.** Rejected: both would leave UI and wording stranded at Knock when we swap.
+- **Keep a copy of each Notification in Cadence's database.** Rejected: it would duplicate the Notification Feed and weaken the swappable boundary.
+- **Let Knock's email open and link tracking mark Notifications read.** Rejected: Knock tracks each channel's message separately, so it would mark the email and leave the Notification unread in the Notification Feed. Link tracking would also send every link through a Knock redirect domain.
 
 ## Consequences
 
 Knock's dashboard can't be used to edit Notification wording. If Knock groups several Notifications into one, the text for the group ("3 new Discussion Questions") would have to be written by Knock's template, which goes against Cadence writing all the wording. That question is left for the decision on grouping.
+
+A Notification that Cadence gave up marking read stays unread in the bell until the person clicks it or marks all as read.
