@@ -112,3 +112,7 @@ _Avoid_: Alert, Message, Activity
 **Notification Feed**:
 The place inside Cadence where a person sees their Notifications.
 _Avoid_: Inbox, Activity feed
+
+**Notification Provider**:
+The outside service that stores and delivers Notifications for Cadence.
+_Avoid_: Vendor, Notification service
