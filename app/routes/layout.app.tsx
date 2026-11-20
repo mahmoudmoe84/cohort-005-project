@@ -8,7 +8,7 @@ import {
 } from "~/components/notification-feed";
 import { Toaster } from "~/components/ui/sonner";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
-import { configuredNotificationProvider } from "~/lib/notification-provider.server";
+import { notificationFeedCredentials } from "~/lib/notifications.server";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { eq, and, or, sql, desc } from "drizzle-orm";
 import { db } from "~/db";
@@ -220,8 +220,9 @@ export async function loader({ request }: Route.LoaderArgs) {
     countryTierInfo,
     countries: COUNTRIES,
     isTeamAdmin: currentUserId ? isTeamAdmin(currentUserId) : false,
+    // Null when the Notification Provider can't say, which hides the bell.
     feedCredentials: currentUser
-      ? await configuredNotificationProvider().feedCredentials(currentUser.id)
+      ? await notificationFeedCredentials(currentUser.id)
       : null,
   };
 }

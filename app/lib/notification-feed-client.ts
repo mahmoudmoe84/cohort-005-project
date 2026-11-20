@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { connectKnockNotificationFeed } from "~/lib/knock-notification-feed-client";
 import {
   NOTIFICATION_KINDS,
   type FeedCredentials,
@@ -8,9 +9,8 @@ import {
 // ─── Notification Feed client ───
 // How the browser reads one person's Notification Feed (ADR 0013). Cadence's
 // components only talk to this interface. Each Notification Provider has an
-// adapter behind it that returns Cadence's own Notification type.
-//
-// Until the Knock adapter exists (#36), the only adapter is the fake below.
+// adapter behind it that returns Cadence's own Notification type: Knock's is
+// in knock-notification-feed-client.ts, and the fake is below.
 
 export type NotificationPage = {
   notifications: Notification[];
@@ -20,7 +20,11 @@ export type NotificationPage = {
 export interface NotificationFeedClient {
   /** Newest first. Pass the last page's nextCursor for older Notifications. */
   fetchPage(cursor?: string): Promise<NotificationPage>;
-  /** How many of the person's Notifications are unread. */
+  /**
+   * How many of the person's Notifications are unread, as of the latest page,
+   * arrival or mark this client knows of. Fetch the newest page first to
+   * catch up with changes made elsewhere, such as opening a page.
+   */
   unreadCount(): Promise<number>;
   markRead(id: string): Promise<void>;
   markAllRead(): Promise<void>;
@@ -37,7 +41,12 @@ export interface NotificationFeedClient {
 export function connectNotificationFeed(
   credentials: FeedCredentials
 ): NotificationFeedClient {
-  return fakeNotificationFeedClient(credentials.userId);
+  switch (credentials.provider) {
+    case "knock":
+      return connectKnockNotificationFeed(credentials);
+    case "fake":
+      return fakeNotificationFeedClient(credentials.userId);
+  }
 }
 
 // ─── The fake ───

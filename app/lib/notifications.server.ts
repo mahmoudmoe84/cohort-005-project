@@ -15,6 +15,7 @@ import {
 } from "~/db/schema";
 import {
   NOTIFICATION_SETTINGS_URL,
+  type FeedCredentials,
   type NotificationKind,
   type SummaryPart,
 } from "~/lib/notifications";
@@ -623,6 +624,31 @@ export async function notifyRefundRequestDecided(
       `Couldn't send the Refund Request decided Notification for Refund Request ${refundRequestId}`,
       error
     );
+  }
+}
+
+// ─── Connecting to the Notification Feed ───
+
+/**
+ * What the browser needs to connect to the person's Notification Feed, or
+ * null when the Notification Provider can't say. Every page's layout asks for
+ * it, so it never throws: a failure is logged and the page opens without the
+ * bell. The provider defaults to the configured one.
+ */
+export async function notificationFeedCredentials(
+  userId: number,
+  provider?: NotificationProvider
+): Promise<FeedCredentials | null> {
+  try {
+    return await (provider ?? configuredNotificationProvider()).feedCredentials(
+      userId
+    );
+  } catch (error) {
+    console.error(
+      `Couldn't get the Notification Feed credentials for user ${userId}`,
+      error
+    );
+    return null;
   }
 }
 

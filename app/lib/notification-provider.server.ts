@@ -7,6 +7,7 @@ import type {
   SummaryPart,
 } from "~/lib/notifications";
 import { outboxTransport, type MailTransport } from "~/lib/mailer.server";
+import { configuredKnockNotificationProvider } from "~/lib/knock-notification-provider.server";
 
 // ─── Notification Provider ───
 // The outside service that stores and delivers Notifications sits behind this
@@ -14,8 +15,8 @@ import { outboxTransport, type MailTransport } from "~/lib/mailer.server";
 // outside the adapters knows which provider it is. Cadence writes all the
 // wording, so a send carries finished text.
 //
-// Until the Knock adapter exists (#36), the only provider is the fake below,
-// used whenever KNOCK_API_KEY is unset.
+// Cadence uses Knock, through knock-notification-provider.server.ts, whenever
+// KNOCK_API_KEY is set (docs/knock-setup.md), and the fake below otherwise.
 
 export type NotificationRecipient = { id: number; email: string };
 
@@ -66,6 +67,11 @@ export interface NotificationProvider {
 // Cadence uses. Without `mail`, email is only recorded in `sent`.
 
 const FEED_PAGE_SIZE = 20;
+
+// Notification email comes from this address, unlike Cadence's other
+// transactional email. Through Knock it's set on Knock's Postmark channel
+// (docs/knock-setup.md); the fake sends from it too.
+const NOTIFICATION_EMAIL_FROM = "Cadence <support@superhumanai.tech>";
 
 export type FakeNotificationFeed = {
   /** Newest first. Pass the last page's nextCursor for older Notifications. */
@@ -139,7 +145,11 @@ export function createFakeNotificationProvider(
       const { email } = notification.content;
       if (email && mail) {
         for (const recipient of notification.recipients) {
-          await mail.send({ to: recipient.email, ...email });
+          await mail.send({
+            from: NOTIFICATION_EMAIL_FROM,
+            to: recipient.email,
+            ...email,
+          });
         }
       }
       return workflowRunId;
@@ -222,13 +232,10 @@ export function configuredFakeNotificationProvider(): FakeNotificationProvider |
   return shared.cadenceFakeNotificationProvider;
 }
 
+/** Knock when KNOCK_API_KEY is set, and the fake otherwise. */
 export function configuredNotificationProvider(): NotificationProvider {
-  const fake = configuredFakeNotificationProvider();
-  if (!fake) {
-    throw new Error(
-      "KNOCK_API_KEY is set, but Cadence has no Knock adapter yet (#36). " +
-        "Unset it to use the fake Notification Provider."
-    );
-  }
-  return fake;
+  return (
+    configuredFakeNotificationProvider() ??
+    configuredKnockNotificationProvider()
+  );
 }

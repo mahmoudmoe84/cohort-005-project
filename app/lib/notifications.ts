@@ -41,4 +41,20 @@ export const NOTIFICATION_SETTINGS_URL = "/settings/notifications";
  * hands it from the Notification Provider to the browser untouched: only the
  * browser adapter for that provider reads inside it.
  */
-export type FeedCredentials = { provider: "fake"; userId: number };
+export type FeedCredentials =
+  | { provider: "fake"; userId: number }
+  | {
+      provider: "knock";
+      /** The person's id, as Knock knows them. */
+      userId: string;
+      /** Knock's public API key, which is safe in the browser. */
+      publicApiKey: string;
+      /** The id of Knock's in-app feed channel. */
+      feedChannelId: string;
+      /**
+       * Proves to Knock who the browser is acting for. Null when Cadence has
+       * no signing key, which only works while Knock's enhanced security is
+       * off.
+       */
+      userToken: string | null;
+    };
