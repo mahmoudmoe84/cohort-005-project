@@ -198,7 +198,8 @@ export default function Settings({ loaderData }: Route.ComponentProps) {
       </Card>
 
       {refundRequests.length > 0 && (
-        <Card className="mt-8 max-w-md">
+        // The Refund Request decided Notification links straight here.
+        <Card id="refund-requests" className="mt-8 max-w-md">
           <CardHeader>
             <h2 className="text-lg font-semibold">Refund Requests</h2>
             {openCount > 0 && (
