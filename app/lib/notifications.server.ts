@@ -18,6 +18,7 @@ import {
   NOTIFICATION_SETTINGS_URL,
   summaryText,
   type FeedCredentials,
+  type NotificationActor,
   type NotificationKind,
   type SummaryPart,
 } from "~/lib/notifications";
@@ -27,6 +28,7 @@ import {
   configuredNotificationProvider,
   type NotificationEmail,
   type NotificationProvider,
+  type NotificationRecipient,
   type NotificationSend,
 } from "~/lib/notification-provider.server";
 
@@ -40,6 +42,36 @@ import {
 
 type Db = BetterSQLite3Database<typeof schema>;
 
+// A person a Notification is from or to: the author of a comment, the buyer
+// of a Purchase, or the Student who claimed a Seat. Each query selects them
+// with these columns.
+const personColumns = {
+  id: users.id,
+  name: users.name,
+  email: users.email,
+  avatarUrl: users.avatarUrl,
+  emailAndPopUps: users.emailAndPopUps,
+};
+
+type Person = {
+  id: number;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  /** Their switch on Notification settings. */
+  emailAndPopUps: boolean;
+};
+
+/** Who did it, as the Notification shows them: never their email address. */
+function asActor(person: Person): NotificationActor {
+  return { name: person.name, avatarUrl: person.avatarUrl };
+}
+
+/** Only what the Notification Provider needs to reach them. */
+function asRecipient(person: Person): NotificationRecipient {
+  return { id: person.id, email: person.email };
+}
+
 function getCommentWithAuthor(db: Db, commentId: number) {
   return db
     .select({
@@ -47,11 +79,7 @@ function getCommentWithAuthor(db: Db, commentId: number) {
       parentId: comments.parentId,
       lessonId: comments.lessonId,
       body: comments.body,
-      authorId: users.id,
-      authorName: users.name,
-      authorEmail: users.email,
-      authorAvatarUrl: users.avatarUrl,
-      authorEmailAndPopUps: users.emailAndPopUps,
+      author: personColumns,
     })
     .from(comments)
     .innerJoin(users, eq(comments.userId, users.id))
@@ -107,11 +135,7 @@ function getRefundRequestWithBuyer(db: Db, refundRequestId: number) {
       decidedById: refunds.resolvedByUserId,
       amountPaid: purchases.amountPaid,
       courseTitle: courses.title,
-      buyerId: users.id,
-      buyerName: users.name,
-      buyerEmail: users.email,
-      buyerAvatarUrl: users.avatarUrl,
-      buyerEmailAndPopUps: users.emailAndPopUps,
+      buyer: personColumns,
     })
     .from(refunds)
     .innerJoin(purchases, eq(refunds.purchaseId, purchases.id))
@@ -133,9 +157,7 @@ function getClaimedSeat(db: Db, seatId: number) {
       teamLicenceId: coupons.purchaseId,
       teamAdminId: purchases.userId,
       courseTitle: courses.title,
-      studentId: users.id,
-      studentName: users.name,
-      studentAvatarUrl: users.avatarUrl,
+      student: personColumns,
     })
     .from(coupons)
     .innerJoin(users, eq(coupons.redeemedByUserId, users.id))
@@ -164,20 +186,27 @@ function countSeats(db: Db, teamLicenceId: number) {
 type Course = { title: string; slug: string };
 type Lesson = { id: number; title: string };
 
-// Discussion Questions and Discussion Replies live on a lesson. If the lesson
-// has gone, the Notification names the course and links to the course page.
+/**
+ * Where a Discussion Question or Discussion Reply was posted: a lesson in a
+ * course. If the lesson has gone, the Notification names the course and links
+ * to the course page instead.
+ */
+type DiscussionPlace = { course: Course; lesson: Lesson | undefined };
+
+function placeTitle({ course, lesson }: DiscussionPlace): string {
+  return lesson?.title ?? course.title;
+}
 
 // Who did what, on which lesson.
 function discussionSummary(
   authorName: string,
   didWhat: string,
-  course: Course,
-  lesson: Lesson | undefined
+  place: DiscussionPlace
 ): SummaryPart[] {
   return [
     { text: authorName, strong: true },
     { text: didWhat },
-    { text: lesson?.title ?? course.title, strong: true },
+    { text: placeTitle(place), strong: true },
   ];
 }
 
@@ -188,23 +217,23 @@ type CommentWithAuthor = NonNullable<ReturnType<typeof getCommentWithAuthor>>;
 function discussionReplyEmail(
   discussionQuestion: CommentWithAuthor,
   discussionReply: CommentWithAuthor,
-  course: Course,
-  lesson: Lesson | undefined
+  place: DiscussionPlace
 ): NotificationEmail {
+  const { course, lesson } = place;
   const where = lesson
     ? `"${lesson.title}" in "${course.title}"`
     : `"${course.title}"`;
 
   return {
-    subject: `${discussionReply.authorName} replied to your Discussion Question on ${lesson?.title ?? course.title}`,
+    subject: `${discussionReply.author.name} replied to your Discussion Question on ${placeTitle(place)}`,
     body: [
-      `Hi ${discussionQuestion.authorName},`,
+      `Hi ${discussionQuestion.author.name},`,
       "",
-      `${discussionReply.authorName} replied to your Discussion Question on ${where}:`,
+      `${discussionReply.author.name} replied to your Discussion Question on ${where}:`,
       "",
       quote(discussionReply.body),
       "",
-      `View it on Cadence: ${absoluteUrl(discussionLink(course, lesson, discussionReply.id))}`,
+      `View it on Cadence: ${absoluteUrl(discussionLink(place, discussionReply.id))}`,
       "",
       "— The Cadence team",
       "",
@@ -223,8 +252,7 @@ function quote(text: string): string {
 
 // Every comment on the lesson page carries an id="comment-<id>" anchor.
 function discussionLink(
-  course: Course,
-  lesson: Lesson | undefined,
+  { course, lesson }: DiscussionPlace,
   commentId: number
 ): string {
   if (!lesson) return `/courses/${course.slug}`;
@@ -324,7 +352,7 @@ function refundRequestDecidedEmail(
   return {
     subject: `Your Refund Request for ${courseTitle} was ${approved ? "approved" : "declined"}`,
     body: [
-      `Hi ${refundRequest.buyerName},`,
+      `Hi ${refundRequest.buyer.name},`,
       "",
       decision,
       ...note,
@@ -411,51 +439,37 @@ export async function notifyDiscussionReply(
         discussionReply.parentId
       );
       const course = getCourse(db, courseId);
-      const lesson = getLesson(db, discussionReply.lessonId);
       if (!discussionQuestion || !course) return;
 
       // The Instructor's own top-level comment isn't a Discussion Question, so
       // a comment answering it isn't a Discussion Reply.
-      if (discussionQuestion.authorId === course.instructorId) return;
+      if (discussionQuestion.author.id === course.instructorId) return;
 
       // Nobody hears about their own action.
-      if (discussionQuestion.authorId === discussionReply.authorId) return;
+      if (discussionQuestion.author.id === discussionReply.author.id) return;
 
+      const place = { course, lesson: getLesson(db, discussionReply.lessonId) };
       await send(
         db,
         {
           kind: "discussion-reply",
-          recipients: [
-            {
-              id: discussionQuestion.authorId,
-              email: discussionQuestion.authorEmail,
-            },
-          ],
-          actor: {
-            name: discussionReply.authorName,
-            avatarUrl: discussionReply.authorAvatarUrl,
-          },
+          recipients: [asRecipient(discussionQuestion.author)],
+          actor: asActor(discussionReply.author),
           content: {
             summary: discussionSummary(
-              discussionReply.authorName,
+              discussionReply.author.name,
               " replied to your Discussion Question on ",
-              course,
-              lesson
+              place
             ),
             excerpt: discussionReply.body,
             context: course.title,
-            url: discussionLink(course, lesson, discussionReply.id),
+            url: discussionLink(place, discussionReply.id),
             // The author's switch drops the email, and only the email.
             email: emailAndPopUpsOn(
               "discussion-reply",
-              discussionQuestion.authorEmailAndPopUps
+              discussionQuestion.author.emailAndPopUps
             )
-              ? discussionReplyEmail(
-                  discussionQuestion,
-                  discussionReply,
-                  course,
-                  lesson
-                )
+              ? discussionReplyEmail(discussionQuestion, discussionReply, place)
               : undefined,
           },
         },
@@ -490,31 +504,30 @@ export async function notifyDiscussionQuestion(
 
       // The Instructor's own top-level comment isn't a Discussion Question, and
       // nobody hears about their own action.
-      if (discussionQuestion.authorId === course.instructorId) return;
+      if (discussionQuestion.author.id === course.instructorId) return;
 
-      const lesson = getLesson(db, discussionQuestion.lessonId);
       const instructor = getRecipient(db, course.instructorId);
       if (!instructor) return;
 
+      const place = {
+        course,
+        lesson: getLesson(db, discussionQuestion.lessonId),
+      };
       await send(
         db,
         {
           kind: "discussion-question",
           recipients: [instructor],
-          actor: {
-            name: discussionQuestion.authorName,
-            avatarUrl: discussionQuestion.authorAvatarUrl,
-          },
+          actor: asActor(discussionQuestion.author),
           content: {
             summary: discussionSummary(
-              discussionQuestion.authorName,
+              discussionQuestion.author.name,
               " asked a Discussion Question on ",
-              course,
-              lesson
+              place
             ),
             excerpt: discussionQuestion.body,
             context: course.title,
-            url: discussionLink(course, lesson, discussionQuestion.id),
+            url: discussionLink(place, discussionQuestion.id),
           },
         },
         { commentId: discussionQuestion.id },
@@ -544,7 +557,7 @@ export async function notifyOpenRefundRequest(
       // Nobody hears about their own action, even a Platform Admin who asks for
       // their own money back.
       const platformAdmins = getPlatformAdmins(db).filter(
-        (platformAdmin) => platformAdmin.id !== refundRequest.buyerId
+        (platformAdmin) => platformAdmin.id !== refundRequest.buyer.id
       );
       if (platformAdmins.length === 0) return;
 
@@ -553,13 +566,10 @@ export async function notifyOpenRefundRequest(
         {
           kind: "open-refund-request",
           recipients: platformAdmins,
-          actor: {
-            name: refundRequest.buyerName,
-            avatarUrl: refundRequest.buyerAvatarUrl,
-          },
+          actor: asActor(refundRequest.buyer),
           content: {
             summary: openRefundRequestSummary(
-              refundRequest.buyerName,
+              refundRequest.buyer.name,
               refundRequest.courseTitle,
               refundRequest.amountPaid
             ),
@@ -596,7 +606,7 @@ export async function notifySeatClaimed(
 
       // Nobody hears about their own action, so a Team Admin who claims one of
       // their own Seats isn't told.
-      if (seat.studentId === seat.teamAdminId) return;
+      if (seat.student.id === seat.teamAdminId) return;
 
       const teamAdmin = getRecipient(db, seat.teamAdminId);
       if (!teamAdmin) return;
@@ -606,10 +616,10 @@ export async function notifySeatClaimed(
         {
           kind: "seat-claimed",
           recipients: [teamAdmin],
-          actor: { name: seat.studentName, avatarUrl: seat.studentAvatarUrl },
+          actor: asActor(seat.student),
           content: {
             summary: seatClaimedSummary(
-              seat.studentName,
+              seat.student.name,
               seat.courseTitle,
               countSeats(db, seat.teamLicenceId)
             ),
@@ -645,15 +655,13 @@ export async function notifyRefundRequestDecided(
 
       // Nobody hears about their own action, even a Platform Admin who decides
       // their own Refund Request.
-      if (refundRequest.decidedById === refundRequest.buyerId) return;
+      if (refundRequest.decidedById === refundRequest.buyer.id) return;
 
       await send(
         db,
         {
           kind: "refund-request-decided",
-          recipients: [
-            { id: refundRequest.buyerId, email: refundRequest.buyerEmail },
-          ],
+          recipients: [asRecipient(refundRequest.buyer)],
           actor: null,
           content: {
             summary: refundRequestDecidedSummary(refundRequest),
@@ -663,7 +671,7 @@ export async function notifyRefundRequestDecided(
             // Refund Request decided ignores the switch, so this always goes.
             email: emailAndPopUpsOn(
               "refund-request-decided",
-              refundRequest.buyerEmailAndPopUps
+              refundRequest.buyer.emailAndPopUps
             )
               ? refundRequestDecidedEmail(refundRequest)
               : undefined,
