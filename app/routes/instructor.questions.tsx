@@ -13,6 +13,7 @@ import { UserAvatar } from "~/components/user-avatar";
 import { AlertTriangle, CheckCircle2, ExternalLink } from "lucide-react";
 import { cn, daysSince, formatRelativeTime } from "~/lib/utils";
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from "~/lib/comments";
+import { notifyDiscussionReply } from "~/lib/notifications.server";
 import { parseFormData } from "~/lib/validation";
 import { db } from "~/db";
 import {
@@ -208,12 +209,14 @@ export async function action({ request }: Route.ActionArgs) {
   const access = await requireStaff(request, course.courseId);
 
   try {
-    createComment(
+    const reply = createComment(
       access.userId!,
       question.lessonId,
       question.id,
       parsed.data.body
     );
+    // After the insert, so a failed send can't lose the reply.
+    await notifyDiscussionReply(db, course.courseId, reply.id);
   } catch (error) {
     if (error instanceof Error) {
       return { ok: false, error: error.message };
