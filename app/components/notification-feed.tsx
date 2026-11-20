@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, useNavigate, useRevalidator } from "react-router";
+import { Link, useLocation, useNavigate, useRevalidator } from "react-router";
 import { Popover } from "radix-ui";
 import { toast } from "sonner";
 import { Bell, Settings } from "lucide-react";
@@ -49,6 +49,7 @@ type FeedState = {
 
 type FeedEvent =
   | { type: "newest-page-loaded"; page: NotificationPage }
+  | { type: "newest-page-refreshed"; page: NotificationPage }
   | { type: "newest-page-failed" }
   | { type: "older-page-loaded"; page: NotificationPage }
   | { type: "arrived"; notification: Notification }
@@ -85,6 +86,26 @@ function feedReducer(state: FeedState, event: FeedEvent): FeedState {
         ]),
         nextCursor: event.page.nextCursor,
       };
+
+    case "newest-page-refreshed": {
+      // Opening a page can mark Notifications read on the server, so the page
+      // brings their read state. Read only goes one way: a page fetched before
+      // a mark-read here landed doesn't undo it.
+      const loaded = new Map(
+        state.notifications.map((notification) => [
+          notification.id,
+          notification,
+        ])
+      );
+      const newest = event.page.notifications.map((notification) => {
+        const known = loaded.get(notification.id);
+        return known?.readAt ? known : notification;
+      });
+      return {
+        ...state,
+        notifications: withoutRepeats([...newest, ...state.notifications]),
+      };
+    }
 
     case "newest-page-failed":
       return { ...state, status: "failed" };
@@ -169,6 +190,8 @@ type FeedConnection = {
   loadOlder(cursor: string): void;
   markRead(id: string): void;
   markAllRead(): void;
+  /** Looks again at the unread count and the newest page. */
+  refresh(): void;
 };
 
 const NotificationFeedContext = createContext<NotificationFeed | null>(null);
@@ -200,6 +223,7 @@ export function NotificationFeedProvider({
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const { revalidate } = useRevalidator();
+  const location = useLocation();
 
   // A Notification about the page you're on links to it with only a new hash,
   // and React Router doesn't load a page's data again for a hash change, so
@@ -298,6 +322,13 @@ export function NotificationFeedProvider({
           }
         );
       },
+
+      refresh() {
+        refreshUnreadCount();
+        client.fetchPage().then((page) => {
+          if (connected) dispatch({ type: "newest-page-refreshed", page });
+        }, logFeedError);
+      },
     });
 
     return () => {
@@ -308,6 +339,16 @@ export function NotificationFeedProvider({
       for (const id of popUps) toast.dismiss(id);
     };
   }, [initialCredentials]);
+
+  // Opening a page can mark its Notifications read on the server, however
+  // the person got there, so look again each time a navigation lands. On
+  // connecting, the connection has just looked.
+  const lookedAt = useRef(location.key);
+  useEffect(() => {
+    if (location.key === lookedAt.current) return;
+    lookedAt.current = location.key;
+    connection?.refresh();
+  }, [connection, location.key]);
 
   const value = useMemo<NotificationFeed>(() => {
     const { nextCursor } = state;
