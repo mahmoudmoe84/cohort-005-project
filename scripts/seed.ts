@@ -1866,7 +1866,7 @@ This course is still in draft while the cluster examples are rewritten against t
   // the lesson thread both have something real to render: answered threads,
   // questions still waiting (two of them stale enough to flag), a question only
   // another student replied to (still unanswered), an edited comment, and a
-  // deleted question kept as a tombstone because it has a reply.
+  // deleted question that stays in the thread as a tombstone, with its reply.
   // Only enrolled students comment.
 
   function comment(values: typeof schema.comments.$inferInsert) {
