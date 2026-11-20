@@ -10,7 +10,10 @@ import {
   type RenderedComment,
 } from "~/components/comment-thread";
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from "~/lib/comments";
-import { notifyDiscussionReply } from "~/lib/notifications.server";
+import {
+  notifyDiscussionQuestion,
+  notifyDiscussionReply,
+} from "~/lib/notifications.server";
 import { db } from "~/db";
 import {
   categories,
@@ -911,6 +914,8 @@ export async function action({ params, request }: Route.ActionArgs) {
         // and deleting never notify.
         if (comment.parentId !== null) {
           await notifyDiscussionReply(db, course.id, comment.id);
+        } else {
+          await notifyDiscussionQuestion(db, course.id, comment.id);
         }
         return { ok: true };
       }

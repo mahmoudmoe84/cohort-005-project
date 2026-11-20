@@ -1,8 +1,18 @@
 import { eq } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
-import { comments, courses, lessons, users } from "~/db/schema";
+import {
+  comments,
+  coupons,
+  courses,
+  lessons,
+  purchases,
+  refunds,
+  users,
+  UserRole,
+} from "~/db/schema";
 import type { SummaryPart } from "~/lib/notifications";
+import { formatPrice } from "~/lib/utils";
 import {
   configuredNotificationProvider,
   type NotificationProvider,
@@ -56,6 +66,75 @@ function getLesson(db: Db, lessonId: number) {
     .get();
 }
 
+function getRecipient(db: Db, userId: number) {
+  return db
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(eq(users.id, userId))
+    .get();
+}
+
+function getPlatformAdmins(db: Db) {
+  return db
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(eq(users.role, UserRole.Admin))
+    .all();
+}
+
+function getRefundRequestWithBuyer(db: Db, refundRequestId: number) {
+  return db
+    .select({
+      id: refunds.id,
+      reason: refunds.reason,
+      amountPaid: purchases.amountPaid,
+      courseTitle: courses.title,
+      buyerId: users.id,
+      buyerName: users.name,
+      buyerAvatarUrl: users.avatarUrl,
+    })
+    .from(refunds)
+    .innerJoin(purchases, eq(refunds.purchaseId, purchases.id))
+    .innerJoin(courses, eq(purchases.courseId, courses.id))
+    .innerJoin(users, eq(purchases.userId, users.id))
+    .where(eq(refunds.id, refundRequestId))
+    .get();
+}
+
+// Finds nothing until a Student has claimed the Seat. The Team Admin is
+// whoever bought the Team Licence the Seat is on.
+function getClaimedSeat(db: Db, seatId: number) {
+  return db
+    .select({
+      teamLicenceId: coupons.purchaseId,
+      teamAdminId: purchases.userId,
+      courseTitle: courses.title,
+      studentId: users.id,
+      studentName: users.name,
+      studentAvatarUrl: users.avatarUrl,
+    })
+    .from(coupons)
+    .innerJoin(users, eq(coupons.redeemedByUserId, users.id))
+    .innerJoin(purchases, eq(coupons.purchaseId, purchases.id))
+    .innerJoin(courses, eq(coupons.courseId, courses.id))
+    .where(eq(coupons.id, seatId))
+    .get();
+}
+
+// Counted on the one Team Licence, not across every Team Licence the team
+// holds for the course.
+function countSeats(db: Db, teamLicenceId: number) {
+  const seats = db
+    .select({ redeemedAt: coupons.redeemedAt })
+    .from(coupons)
+    .where(eq(coupons.purchaseId, teamLicenceId))
+    .all();
+  return {
+    total: seats.length,
+    unclaimed: seats.filter((seat) => seat.redeemedAt === null).length,
+  };
+}
+
 // ─── Wording ───
 
 type Course = { title: string; slug: string };
@@ -63,6 +142,18 @@ type Lesson = { id: number; title: string };
 
 // Discussion Questions and Discussion Replies live on a lesson. If the lesson
 // has gone, the Notification names the course and links to the course page.
+
+function discussionQuestionSummary(
+  askerName: string,
+  course: Course,
+  lesson: Lesson | undefined
+): SummaryPart[] {
+  return [
+    { text: askerName, strong: true },
+    { text: " asked a Discussion Question on " },
+    { text: lesson?.title ?? course.title, strong: true },
+  ];
+}
 
 function discussionReplySummary(
   replierName: string,
@@ -84,6 +175,36 @@ function discussionLink(
 ): string {
   if (!lesson) return `/courses/${course.slug}`;
   return `/courses/${course.slug}/lessons/${lesson.id}#comment-${commentId}`;
+}
+
+// A Refund is always the full amount the buyer paid, so that's what they're
+// asking for.
+function openRefundRequestSummary(
+  buyerName: string,
+  courseTitle: string,
+  amountPaid: number
+): SummaryPart[] {
+  return [
+    { text: buyerName, strong: true },
+    { text: " asked for a refund on " },
+    { text: courseTitle, strong: true },
+    { text: ` (${formatPrice(amountPaid)})` },
+  ];
+}
+
+// The Seats left are the Team Licence's Unclaimed Seats.
+function seatClaimedSummary(
+  studentName: string,
+  courseTitle: string,
+  seats: { total: number; unclaimed: number }
+): SummaryPart[] {
+  const noun = seats.total === 1 ? "Seat" : "Seats";
+  return [
+    { text: studentName, strong: true },
+    { text: " claimed a Seat on " },
+    { text: courseTitle, strong: true },
+    { text: `. ${seats.unclaimed} of ${seats.total} ${noun} left.` },
+  ];
 }
 
 // ─── One function per kind ───
@@ -129,6 +250,144 @@ export async function notifyDiscussionReply(
   } catch (error) {
     console.error(
       `Couldn't send the Discussion Reply Notification for comment ${discussionReplyId}`,
+      error
+    );
+  }
+}
+
+/**
+ * Tells the course's Instructor that someone asked a Discussion Question on
+ * one of their lessons. Call it once the top-level comment is saved. It never
+ * throws: a failure is logged, so the comment still gets posted. The provider
+ * defaults to the configured one.
+ */
+export async function notifyDiscussionQuestion(
+  db: Db,
+  courseId: number,
+  discussionQuestionId: number,
+  provider?: NotificationProvider
+): Promise<void> {
+  try {
+    const question = getCommentWithAuthor(db, discussionQuestionId);
+    const course = getCourse(db, courseId);
+    if (!question || question.parentId !== null || !course) return;
+
+    // The Instructor's own top-level comment isn't a Discussion Question, and
+    // nobody hears about their own action.
+    if (question.authorId === course.instructorId) return;
+
+    const lesson = getLesson(db, question.lessonId);
+    const instructor = getRecipient(db, course.instructorId);
+    if (!instructor) return;
+
+    await (provider ?? configuredNotificationProvider()).send({
+      kind: "discussion-question",
+      recipients: [instructor],
+      actor: { name: question.authorName, avatarUrl: question.authorAvatarUrl },
+      content: {
+        summary: discussionQuestionSummary(question.authorName, course, lesson),
+        excerpt: question.body,
+        context: course.title,
+        url: discussionLink(course, lesson, question.id),
+      },
+    });
+  } catch (error) {
+    console.error(
+      `Couldn't send the Discussion Question Notification for comment ${discussionQuestionId}`,
+      error
+    );
+  }
+}
+
+/**
+ * Tells every Platform Admin that a buyer raised a Refund Request, so one of
+ * them can decide it. Call it once the Refund Request is saved. It never
+ * throws: a failure is logged, so the Refund Request still gets raised. The
+ * provider defaults to the configured one.
+ */
+export async function notifyOpenRefundRequest(
+  db: Db,
+  refundRequestId: number,
+  provider?: NotificationProvider
+): Promise<void> {
+  try {
+    const refundRequest = getRefundRequestWithBuyer(db, refundRequestId);
+    if (!refundRequest) return;
+
+    // Nobody hears about their own action, even a Platform Admin who asks for
+    // their own money back.
+    const platformAdmins = getPlatformAdmins(db).filter(
+      (platformAdmin) => platformAdmin.id !== refundRequest.buyerId
+    );
+    if (platformAdmins.length === 0) return;
+
+    await (provider ?? configuredNotificationProvider()).send({
+      kind: "open-refund-request",
+      recipients: platformAdmins,
+      actor: {
+        name: refundRequest.buyerName,
+        avatarUrl: refundRequest.buyerAvatarUrl,
+      },
+      content: {
+        summary: openRefundRequestSummary(
+          refundRequest.buyerName,
+          refundRequest.courseTitle,
+          refundRequest.amountPaid
+        ),
+        excerpt: refundRequest.reason,
+        context: refundRequest.courseTitle,
+        // The review page, which shows Open Refund Requests unless told otherwise.
+        url: "/admin/refunds",
+      },
+    });
+  } catch (error) {
+    console.error(
+      `Couldn't send the Open Refund Request Notification for Refund Request ${refundRequestId}`,
+      error
+    );
+  }
+}
+
+/**
+ * Tells the Team Admin who bought a Team Licence that a Student claimed one of
+ * its Seats, and how many are left. Call it once the claim is saved. It never
+ * throws: a failure is logged, so the Student still gets their Enrollment.
+ * The provider defaults to the configured one.
+ */
+export async function notifySeatClaimed(
+  db: Db,
+  seatId: number,
+  provider?: NotificationProvider
+): Promise<void> {
+  try {
+    const seat = getClaimedSeat(db, seatId);
+    if (!seat) return;
+
+    // Nobody hears about their own action, so a Team Admin who claims one of
+    // their own Seats isn't told.
+    if (seat.studentId === seat.teamAdminId) return;
+
+    const teamAdmin = getRecipient(db, seat.teamAdminId);
+    if (!teamAdmin) return;
+
+    await (provider ?? configuredNotificationProvider()).send({
+      kind: "seat-claimed",
+      recipients: [teamAdmin],
+      actor: { name: seat.studentName, avatarUrl: seat.studentAvatarUrl },
+      content: {
+        summary: seatClaimedSummary(
+          seat.studentName,
+          seat.courseTitle,
+          countSeats(db, seat.teamLicenceId)
+        ),
+        excerpt: null,
+        context: seat.courseTitle,
+        url: "/team",
+      },
+    });
+  } catch (error) {
+    console.error(
+      `Couldn't send the Seat claimed Notification for Seat ${seatId}`,
       error
     );
   }

@@ -2,12 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { createTestDb, seedBaseData } from "~/test/setup";
 import * as schema from "~/db/schema";
-import { UserRole } from "~/db/schema";
+import { RefundStatus, UserRole } from "~/db/schema";
 import {
   createFakeNotificationProvider,
   type NotificationProvider,
 } from "./notification-provider.server";
-import { notifyDiscussionReply } from "./notifications.server";
+import {
+  notifyDiscussionQuestion,
+  notifyDiscussionReply,
+  notifyOpenRefundRequest,
+  notifySeatClaimed,
+} from "./notifications.server";
 
 type TestDb = ReturnType<typeof createTestDb>;
 
@@ -79,6 +84,76 @@ function removeLesson() {
   db.$client.pragma("foreign_keys = OFF");
   db.delete(schema.lessons).where(eq(schema.lessons.id, lesson.id)).run();
   db.$client.pragma("foreign_keys = ON");
+}
+
+function addPlatformAdmin(name: string) {
+  const firstName = name.split(" ")[0].toLowerCase();
+  return db
+    .insert(schema.users)
+    .values({ name, email: `${firstName}@example.com`, role: UserRole.Admin })
+    .returning()
+    .get();
+}
+
+function buyCourse(buyerId: number, amountPaid: number) {
+  return db
+    .insert(schema.purchases)
+    .values({ userId: buyerId, courseId: base.course.id, amountPaid })
+    .returning()
+    .get();
+}
+
+function raiseRefundRequest(purchaseId: number, reason: string) {
+  return db
+    .insert(schema.refunds)
+    .values({ purchaseId, status: RefundStatus.Open, reason })
+    .returning()
+    .get();
+}
+
+function addTeam() {
+  return db.insert(schema.teams).values({}).returning().get();
+}
+
+// Cadence gives a Team Admin one team, however many Team Licences they buy, so
+// pass the first Team Licence's team when buying a second.
+function buyTeamLicence(
+  teamAdminId: number,
+  seatCount: number,
+  team = addTeam()
+) {
+  const purchase = buyCourse(teamAdminId, 7900 * seatCount);
+  const seats = Array.from({ length: seatCount }, (_, i) =>
+    db
+      .insert(schema.coupons)
+      .values({
+        teamId: team.id,
+        courseId: base.course.id,
+        code: `SEAT-${purchase.id}-${i}`,
+        purchaseId: purchase.id,
+      })
+      .returning()
+      .get()
+  );
+  return { team, seats };
+}
+
+function claimSeat(seatId: number, studentId: number) {
+  db.update(schema.coupons)
+    .set({ redeemedByUserId: studentId, redeemedAt: new Date().toISOString() })
+    .where(eq(schema.coupons.id, seatId))
+    .run();
+}
+
+function failingProvider(failure: Error): NotificationProvider {
+  return {
+    async send() {
+      throw failure;
+    },
+    async feedCredentials(userId) {
+      return { provider: "fake", userId };
+    },
+  };
 }
 
 describe("notifyDiscussionReply", () => {
@@ -252,6 +327,411 @@ describe("notifyDiscussionReply", () => {
 
     expect(logged).toHaveBeenCalledWith(
       expect.stringContaining(`comment ${reply.id}`),
+      failure
+    );
+  });
+});
+
+describe("notifyDiscussionQuestion", () => {
+  it("sends the course's Instructor one Discussion Question Notification", async () => {
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+
+    await notifyDiscussionQuestion(db, base.course.id, question.id, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        kind: "discussion-question",
+        recipients: [
+          { id: base.instructor.id, email: "instructor@example.com" },
+        ],
+      },
+    ]);
+  });
+
+  it("says who asked on which lesson, quoting the Discussion Question", async () => {
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+
+    await notifyDiscussionQuestion(db, base.course.id, question.id, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        actor: {
+          name: "Liam Thompson",
+          avatarUrl: "https://example.com/avatars/liam.png",
+        },
+        content: {
+          summary: [
+            { text: "Liam Thompson", strong: true },
+            { text: " asked a Discussion Question on " },
+            { text: "Union Types", strong: true },
+          ],
+          excerpt: "When should I reach for a union instead of an enum?",
+          context: "Test Course",
+        },
+      },
+    ]);
+  });
+
+  it("links to the Discussion Question on its lesson page", async () => {
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+
+    await notifyDiscussionQuestion(db, base.course.id, question.id, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        content: {
+          url: `/courses/test-course/lessons/${lesson.id}#comment-${question.id}`,
+        },
+      },
+    ]);
+  });
+
+  it("sends nothing for the Instructor's own top-level comment, which isn't a Discussion Question", async () => {
+    const provider = createFakeNotificationProvider();
+    const announcement = postComment(
+      base.instructor.id,
+      "Heads up: the exercise files were updated this week.",
+      null
+    );
+
+    await notifyDiscussionQuestion(
+      db,
+      base.course.id,
+      announcement.id,
+      provider
+    );
+
+    expect(provider.sent).toEqual([]);
+  });
+
+  it("sends nothing for a Discussion Reply, which isn't a Discussion Question", async () => {
+    const provider = createFakeNotificationProvider();
+    const ava = addStudent("Ava Nakamura");
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+    const reply = postDiscussionReply(
+      ava.id,
+      question.id,
+      "I switched to unions and never looked back."
+    );
+
+    await notifyDiscussionQuestion(db, base.course.id, reply.id, provider);
+
+    expect(provider.sent).toEqual([]);
+  });
+
+  it("falls back to the course when the lesson no longer exists", async () => {
+    const provider = createFakeNotificationProvider();
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+    removeLesson();
+
+    await notifyDiscussionQuestion(db, base.course.id, question.id, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        content: {
+          summary: [
+            { text: "Liam Thompson", strong: true },
+            { text: " asked a Discussion Question on " },
+            { text: "Test Course", strong: true },
+          ],
+          url: "/courses/test-course",
+        },
+      },
+    ]);
+  });
+
+  it("logs a failed send and still returns normally", async () => {
+    const failure = new Error("The Notification Provider is down");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const question = askDiscussionQuestion(
+      liam.id,
+      "When should I reach for a union instead of an enum?"
+    );
+
+    await expect(
+      notifyDiscussionQuestion(
+        db,
+        base.course.id,
+        question.id,
+        failingProvider(failure)
+      )
+    ).resolves.toBeUndefined();
+
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining(`comment ${question.id}`),
+      failure
+    );
+  });
+});
+
+describe("notifyOpenRefundRequest", () => {
+  it("tells every Platform Admin", async () => {
+    const provider = createFakeNotificationProvider();
+    const alex = addPlatformAdmin("Alex Rivera");
+    const pat = addPlatformAdmin("Pat Admin");
+    const purchase = buyCourse(liam.id, 7900);
+    const refundRequest = raiseRefundRequest(
+      purchase.id,
+      "The pace is too fast for me."
+    );
+
+    await notifyOpenRefundRequest(db, refundRequest.id, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        kind: "open-refund-request",
+        recipients: [
+          { id: alex.id, email: "alex@example.com" },
+          { id: pat.id, email: "pat@example.com" },
+        ],
+      },
+    ]);
+  });
+
+  it("leaves out a Platform Admin who raised it on their own Purchase", async () => {
+    const provider = createFakeNotificationProvider();
+    const alex = addPlatformAdmin("Alex Rivera");
+    const pat = addPlatformAdmin("Pat Admin");
+    const purchase = buyCourse(pat.id, 7900);
+    const refundRequest = raiseRefundRequest(
+      purchase.id,
+      "I bought it to check the checkout flow."
+    );
+
+    await notifyOpenRefundRequest(db, refundRequest.id, provider);
+
+    expect(provider.sent).toMatchObject([
+      { recipients: [{ id: alex.id, email: "alex@example.com" }] },
+    ]);
+  });
+
+  it("sends nothing when the only Platform Admin raised it", async () => {
+    const provider = createFakeNotificationProvider();
+    const pat = addPlatformAdmin("Pat Admin");
+    const purchase = buyCourse(pat.id, 7900);
+    const refundRequest = raiseRefundRequest(
+      purchase.id,
+      "I bought it to check the checkout flow."
+    );
+
+    await notifyOpenRefundRequest(db, refundRequest.id, provider);
+
+    expect(provider.sent).toEqual([]);
+  });
+
+  it("says who asked for how much back on which course, quoting their reason", async () => {
+    const provider = createFakeNotificationProvider();
+    addPlatformAdmin("Alex Rivera");
+    const purchase = buyCourse(liam.id, 7900);
+    const refundRequest = raiseRefundRequest(
+      purchase.id,
+      "The pace is too fast for me."
+    );
+
+    await notifyOpenRefundRequest(db, refundRequest.id, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        actor: {
+          name: "Liam Thompson",
+          avatarUrl: "https://example.com/avatars/liam.png",
+        },
+        content: {
+          summary: [
+            { text: "Liam Thompson", strong: true },
+            { text: " asked for a refund on " },
+            { text: "Test Course", strong: true },
+            { text: " ($79.00)" },
+          ],
+          excerpt: "The pace is too fast for me.",
+          context: "Test Course",
+        },
+      },
+    ]);
+  });
+
+  it("links to the Refund Request review page", async () => {
+    const provider = createFakeNotificationProvider();
+    addPlatformAdmin("Alex Rivera");
+    const purchase = buyCourse(liam.id, 7900);
+    const refundRequest = raiseRefundRequest(
+      purchase.id,
+      "The pace is too fast for me."
+    );
+
+    await notifyOpenRefundRequest(db, refundRequest.id, provider);
+
+    expect(provider.sent).toMatchObject([
+      { content: { url: "/admin/refunds" } },
+    ]);
+  });
+
+  it("logs a failed send and still returns normally", async () => {
+    const failure = new Error("The Notification Provider is down");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    addPlatformAdmin("Alex Rivera");
+    const purchase = buyCourse(liam.id, 7900);
+    const refundRequest = raiseRefundRequest(
+      purchase.id,
+      "The pace is too fast for me."
+    );
+
+    await expect(
+      notifyOpenRefundRequest(db, refundRequest.id, failingProvider(failure))
+    ).resolves.toBeUndefined();
+
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining(`Refund Request ${refundRequest.id}`),
+      failure
+    );
+  });
+});
+
+describe("notifySeatClaimed", () => {
+  it("tells the Team Admin who bought the Team Licence", async () => {
+    const provider = createFakeNotificationProvider();
+    const ava = addStudent("Ava Nakamura");
+    const { seats } = buyTeamLicence(ava.id, 3);
+    claimSeat(seats[0].id, liam.id);
+
+    await notifySeatClaimed(db, seats[0].id, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        kind: "seat-claimed",
+        recipients: [{ id: ava.id, email: "ava@example.com" }],
+      },
+    ]);
+  });
+
+  it("says who claimed a Seat on which course, and how many Seats are left", async () => {
+    const provider = createFakeNotificationProvider();
+    const ava = addStudent("Ava Nakamura");
+    const { seats } = buyTeamLicence(ava.id, 5);
+    claimSeat(seats[0].id, addStudent("James Park").id);
+    claimSeat(seats[1].id, addStudent("Sophia Davis").id);
+    claimSeat(seats[2].id, liam.id);
+
+    await notifySeatClaimed(db, seats[2].id, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        actor: {
+          name: "Liam Thompson",
+          avatarUrl: "https://example.com/avatars/liam.png",
+        },
+        content: {
+          summary: [
+            { text: "Liam Thompson", strong: true },
+            { text: " claimed a Seat on " },
+            { text: "Test Course", strong: true },
+            { text: ". 2 of 5 Seats left." },
+          ],
+          excerpt: null,
+          context: "Test Course",
+        },
+      },
+    ]);
+  });
+
+  it("counts only the Seats on that Team Licence", async () => {
+    const provider = createFakeNotificationProvider();
+    const ava = addStudent("Ava Nakamura");
+    const firstLicence = buyTeamLicence(ava.id, 2);
+    const { seats } = buyTeamLicence(ava.id, 5, firstLicence.team);
+    claimSeat(seats[0].id, liam.id);
+
+    await notifySeatClaimed(db, seats[0].id, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        content: {
+          summary: [
+            { text: "Liam Thompson", strong: true },
+            { text: " claimed a Seat on " },
+            { text: "Test Course", strong: true },
+            { text: ". 4 of 5 Seats left." },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("speaks of one Seat on a Team Licence of one", async () => {
+    const provider = createFakeNotificationProvider();
+    const ava = addStudent("Ava Nakamura");
+    const { seats } = buyTeamLicence(ava.id, 1);
+    claimSeat(seats[0].id, liam.id);
+
+    await notifySeatClaimed(db, seats[0].id, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        content: {
+          summary: [
+            { text: "Liam Thompson", strong: true },
+            { text: " claimed a Seat on " },
+            { text: "Test Course", strong: true },
+            { text: ". 0 of 1 Seat left." },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("sends nothing when the Team Admin claims one of their own Seats", async () => {
+    const provider = createFakeNotificationProvider();
+    const ava = addStudent("Ava Nakamura");
+    const { seats } = buyTeamLicence(ava.id, 3);
+    claimSeat(seats[0].id, ava.id);
+
+    await notifySeatClaimed(db, seats[0].id, provider);
+
+    expect(provider.sent).toEqual([]);
+  });
+
+  it("links to the team page", async () => {
+    const provider = createFakeNotificationProvider();
+    const ava = addStudent("Ava Nakamura");
+    const { seats } = buyTeamLicence(ava.id, 3);
+    claimSeat(seats[0].id, liam.id);
+
+    await notifySeatClaimed(db, seats[0].id, provider);
+
+    expect(provider.sent).toMatchObject([{ content: { url: "/team" } }]);
+  });
+
+  it("logs a failed send and still returns normally", async () => {
+    const failure = new Error("The Notification Provider is down");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const ava = addStudent("Ava Nakamura");
+    const { seats } = buyTeamLicence(ava.id, 3);
+    claimSeat(seats[0].id, liam.id);
+
+    await expect(
+      notifySeatClaimed(db, seats[0].id, failingProvider(failure))
+    ).resolves.toBeUndefined();
+
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining(`Seat ${seats[0].id}`),
       failure
     );
   });

@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { parseFormData, parseParams } from "~/lib/validation";
 import { raiseRefundRequest } from "~/lib/refunds.server";
 import { sendEmail } from "~/lib/mailer.server";
+import { notifyOpenRefundRequest } from "~/lib/notifications.server";
 
 const refundParamsSchema = z.object({
   slug: z.string().min(1),
@@ -71,6 +72,10 @@ export async function action({ params, request }: Route.ActionArgs) {
   if (!result.ok) {
     throw data(result.error, { status: result.status });
   }
+
+  // Before the receipt, so a mail failure can't keep the Platform Admins from
+  // hearing about it. This never throws.
+  await notifyOpenRefundRequest(db, result.refundRequestId);
 
   await sendEmail(result.email);
 
