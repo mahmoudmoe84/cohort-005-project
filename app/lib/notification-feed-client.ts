@@ -124,8 +124,10 @@ function fakeNotificationFeedClient(userId: number): NotificationFeedClient {
   return {
     async fetchPage(cursor) {
       const { notifications, nextCursor } = await readPage(cursor);
-      // The caller gets these in the page, so they never count as arrivals.
-      takeIn(notifications);
+      // The first page is what's already there, so none of it counts as
+      // arriving. A page fetched later, after a navigation, leaves arrivals to
+      // the poll, so they still pop up.
+      if (!hasLooked) takeIn(notifications);
       return { notifications, nextCursor };
     },
 

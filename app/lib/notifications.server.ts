@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
 import {
@@ -8,12 +8,14 @@ import {
   lessons,
   purchases,
   refunds,
+  sentNotifications,
   users,
   RefundStatus,
   UserRole,
 } from "~/db/schema";
 import {
   NOTIFICATION_SETTINGS_URL,
+  type NotificationKind,
   type SummaryPart,
 } from "~/lib/notifications";
 import { absoluteUrl } from "~/lib/app-url.server";
@@ -22,6 +24,7 @@ import {
   configuredNotificationProvider,
   type NotificationEmail,
   type NotificationProvider,
+  type NotificationSend,
 } from "~/lib/notification-provider.server";
 
 // ─── Notifications ───
@@ -326,6 +329,36 @@ function refundRequestDecidedEmail(
   };
 }
 
+// ─── Sending ───
+
+/**
+ * What a Notification is about, as stored with each send: a comment or a
+ * Refund Request. Seat claimed is about the team page as a whole.
+ */
+type SentAbout = { commentId?: number; refundRequestId?: number };
+
+// The Notification itself stays at the Notification Provider. Cadence stores
+// the send's workflow run id for each recipient, so it can mark their copy
+// read once they open the page it links to.
+async function send(
+  db: Db,
+  notification: NotificationSend,
+  about: SentAbout,
+  provider: NotificationProvider = configuredNotificationProvider()
+): Promise<void> {
+  const workflowRunId = await provider.send(notification);
+  db.insert(sentNotifications)
+    .values(
+      notification.recipients.map((recipient) => ({
+        recipientId: recipient.id,
+        kind: notification.kind,
+        ...about,
+        workflowRunId,
+      }))
+    )
+    .run();
+}
+
 // ─── One function per kind ───
 
 /**
@@ -355,21 +388,26 @@ export async function notifyDiscussionReply(
     // Nobody hears about their own action.
     if (question.authorId === reply.authorId) return;
 
-    await (provider ?? configuredNotificationProvider()).send({
-      kind: "discussion-reply",
-      recipients: [{ id: question.authorId, email: question.authorEmail }],
-      actor: { name: reply.authorName, avatarUrl: reply.authorAvatarUrl },
-      content: {
-        summary: discussionReplySummary(reply.authorName, course, lesson),
-        excerpt: reply.body,
-        context: course.title,
-        url: discussionLink(course, lesson, reply.id),
-        // The author's switch drops the email, and only the email.
-        email: question.authorEmailAndPopUps
-          ? discussionReplyEmail(question, reply, course, lesson)
-          : undefined,
+    await send(
+      db,
+      {
+        kind: "discussion-reply",
+        recipients: [{ id: question.authorId, email: question.authorEmail }],
+        actor: { name: reply.authorName, avatarUrl: reply.authorAvatarUrl },
+        content: {
+          summary: discussionReplySummary(reply.authorName, course, lesson),
+          excerpt: reply.body,
+          context: course.title,
+          url: discussionLink(course, lesson, reply.id),
+          // The author's switch drops the email, and only the email.
+          email: question.authorEmailAndPopUps
+            ? discussionReplyEmail(question, reply, course, lesson)
+            : undefined,
+        },
       },
-    });
+      { commentId: reply.id },
+      provider
+    );
   } catch (error) {
     console.error(
       `Couldn't send the Discussion Reply Notification for comment ${discussionReplyId}`,
@@ -403,17 +441,29 @@ export async function notifyDiscussionQuestion(
     const instructor = getRecipient(db, course.instructorId);
     if (!instructor) return;
 
-    await (provider ?? configuredNotificationProvider()).send({
-      kind: "discussion-question",
-      recipients: [instructor],
-      actor: { name: question.authorName, avatarUrl: question.authorAvatarUrl },
-      content: {
-        summary: discussionQuestionSummary(question.authorName, course, lesson),
-        excerpt: question.body,
-        context: course.title,
-        url: discussionLink(course, lesson, question.id),
+    await send(
+      db,
+      {
+        kind: "discussion-question",
+        recipients: [instructor],
+        actor: {
+          name: question.authorName,
+          avatarUrl: question.authorAvatarUrl,
+        },
+        content: {
+          summary: discussionQuestionSummary(
+            question.authorName,
+            course,
+            lesson
+          ),
+          excerpt: question.body,
+          context: course.title,
+          url: discussionLink(course, lesson, question.id),
+        },
       },
-    });
+      { commentId: question.id },
+      provider
+    );
   } catch (error) {
     console.error(
       `Couldn't send the Discussion Question Notification for comment ${discussionQuestionId}`,
@@ -444,25 +494,31 @@ export async function notifyOpenRefundRequest(
     );
     if (platformAdmins.length === 0) return;
 
-    await (provider ?? configuredNotificationProvider()).send({
-      kind: "open-refund-request",
-      recipients: platformAdmins,
-      actor: {
-        name: refundRequest.buyerName,
-        avatarUrl: refundRequest.buyerAvatarUrl,
+    await send(
+      db,
+      {
+        kind: "open-refund-request",
+        recipients: platformAdmins,
+        actor: {
+          name: refundRequest.buyerName,
+          avatarUrl: refundRequest.buyerAvatarUrl,
+        },
+        content: {
+          summary: openRefundRequestSummary(
+            refundRequest.buyerName,
+            refundRequest.courseTitle,
+            refundRequest.amountPaid
+          ),
+          excerpt: refundRequest.reason,
+          context: refundRequest.courseTitle,
+          // The review page, which shows Open Refund Requests unless told
+          // otherwise.
+          url: "/admin/refunds",
+        },
       },
-      content: {
-        summary: openRefundRequestSummary(
-          refundRequest.buyerName,
-          refundRequest.courseTitle,
-          refundRequest.amountPaid
-        ),
-        excerpt: refundRequest.reason,
-        context: refundRequest.courseTitle,
-        // The review page, which shows Open Refund Requests unless told otherwise.
-        url: "/admin/refunds",
-      },
-    });
+      { refundRequestId: refundRequest.id },
+      provider
+    );
   } catch (error) {
     console.error(
       `Couldn't send the Open Refund Request Notification for Refund Request ${refundRequestId}`,
@@ -493,21 +549,27 @@ export async function notifySeatClaimed(
     const teamAdmin = getRecipient(db, seat.teamAdminId);
     if (!teamAdmin) return;
 
-    await (provider ?? configuredNotificationProvider()).send({
-      kind: "seat-claimed",
-      recipients: [teamAdmin],
-      actor: { name: seat.studentName, avatarUrl: seat.studentAvatarUrl },
-      content: {
-        summary: seatClaimedSummary(
-          seat.studentName,
-          seat.courseTitle,
-          countSeats(db, seat.teamLicenceId)
-        ),
-        excerpt: null,
-        context: seat.courseTitle,
-        url: "/team",
+    await send(
+      db,
+      {
+        kind: "seat-claimed",
+        recipients: [teamAdmin],
+        actor: { name: seat.studentName, avatarUrl: seat.studentAvatarUrl },
+        content: {
+          summary: seatClaimedSummary(
+            seat.studentName,
+            seat.courseTitle,
+            countSeats(db, seat.teamLicenceId)
+          ),
+          excerpt: null,
+          context: seat.courseTitle,
+          url: "/team",
+        },
       },
-    });
+      // About the team page as a whole.
+      {},
+      provider
+    );
   } catch (error) {
     console.error(
       `Couldn't send the Seat claimed Notification for Seat ${seatId}`,
@@ -535,25 +597,132 @@ export async function notifyRefundRequestDecided(
     // their own Refund Request.
     if (refundRequest.decidedById === refundRequest.buyerId) return;
 
-    await (provider ?? configuredNotificationProvider()).send({
-      kind: "refund-request-decided",
-      recipients: [
-        { id: refundRequest.buyerId, email: refundRequest.buyerEmail },
-      ],
-      actor: null,
-      content: {
-        summary: refundRequestDecidedSummary(refundRequest),
-        excerpt: refundRequest.decisionNote,
-        context: refundRequest.courseTitle,
-        url: REFUND_REQUESTS_URL,
-        // Always, whatever the buyer's switch says: it carries the money
-        // details.
-        email: refundRequestDecidedEmail(refundRequest),
+    await send(
+      db,
+      {
+        kind: "refund-request-decided",
+        recipients: [
+          { id: refundRequest.buyerId, email: refundRequest.buyerEmail },
+        ],
+        actor: null,
+        content: {
+          summary: refundRequestDecidedSummary(refundRequest),
+          excerpt: refundRequest.decisionNote,
+          context: refundRequest.courseTitle,
+          url: REFUND_REQUESTS_URL,
+          // Always, whatever the buyer's switch says: it carries the money
+          // details.
+          email: refundRequestDecidedEmail(refundRequest),
+        },
       },
-    });
+      { refundRequestId: refundRequest.id },
+      provider
+    );
   } catch (error) {
     console.error(
       `Couldn't send the Refund Request decided Notification for Refund Request ${refundRequestId}`,
+      error
+    );
+  }
+}
+
+// ─── Marking read ───
+
+/**
+ * A page that Notifications link to. Opening it marks the person's
+ * Notifications about what's on it read.
+ */
+export type LinkedPage =
+  | { page: "lesson"; lessonId: number }
+  /** The buyer's Refund Requests, in settings. */
+  | { page: "refund-requests" }
+  | { page: "refund-request-review" }
+  | { page: "team" };
+
+// Every page but the lesson shows everything its one kind of Notification is
+// about, so it marks all of them.
+const KIND_LINKING_TO = {
+  "refund-requests": "refund-request-decided",
+  "refund-request-review": "open-refund-request",
+  team: "seat-claimed",
+} satisfies Record<Exclude<LinkedPage["page"], "lesson">, NotificationKind>;
+
+// The person's own Notifications about the page, and nobody else's, that
+// Cadence hasn't had marked read yet.
+function findNotificationsToMark(db: Db, userId: number, page: LinkedPage) {
+  const theirsToMark = and(
+    eq(sentNotifications.recipientId, userId),
+    isNull(sentNotifications.markedReadAt)
+  );
+  const columns = {
+    id: sentNotifications.id,
+    workflowRunId: sentNotifications.workflowRunId,
+  };
+
+  // Discussion Questions and Discussion Replies on that lesson.
+  if (page.page === "lesson") {
+    return db
+      .select(columns)
+      .from(sentNotifications)
+      .innerJoin(comments, eq(sentNotifications.commentId, comments.id))
+      .where(and(theirsToMark, eq(comments.lessonId, page.lessonId)))
+      .all();
+  }
+
+  return db
+    .select(columns)
+    .from(sentNotifications)
+    .where(
+      and(theirsToMark, eq(sentNotifications.kind, KIND_LINKING_TO[page.page]))
+    )
+    .all();
+}
+
+/**
+ * Marks the signed-in person's Notifications about a page read once they open
+ * it, however they got there. Call it from the page's loader. The Notification
+ * Provider is asked once per Notification. It never throws: a failure is
+ * logged, so the page still opens, and what wasn't marked is tried again the
+ * next time. The provider defaults to the configured one.
+ */
+export async function markNotificationsRead(
+  db: Db,
+  userId: number,
+  page: LinkedPage,
+  provider?: NotificationProvider
+): Promise<void> {
+  try {
+    for (const sent of findNotificationsToMark(db, userId, page)) {
+      await markOneRead(db, sent, userId, provider);
+    }
+  } catch (error) {
+    console.error(
+      `Couldn't mark the Notifications on the ${page.page} page read for user ${userId}`,
+      error
+    );
+  }
+}
+
+// Never throws, so one Notification that can't be marked doesn't stop the
+// rest. It's asked about again the next time.
+async function markOneRead(
+  db: Db,
+  sent: { id: number; workflowRunId: string },
+  userId: number,
+  provider: NotificationProvider | undefined
+): Promise<void> {
+  try {
+    await (provider ?? configuredNotificationProvider()).markRead({
+      workflowRunId: sent.workflowRunId,
+      userId,
+    });
+    db.update(sentNotifications)
+      .set({ markedReadAt: new Date().toISOString() })
+      .where(eq(sentNotifications.id, sent.id))
+      .run();
+  } catch (error) {
+    console.error(
+      `Couldn't mark the Notification from workflow run ${sent.workflowRunId} read for user ${userId}`,
       error
     );
   }

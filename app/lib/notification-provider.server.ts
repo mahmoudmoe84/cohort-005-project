@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   FeedCredentials,
   Notification,
@@ -40,19 +41,29 @@ export type NotificationSend = {
   content: NotificationContent;
 };
 
+/** One person's copy of what one send put in the Notification Feed. */
+export type NotificationReadMark = { workflowRunId: string; userId: number };
+
 export interface NotificationProvider {
   /** Sends one Notification to every recipient and returns its workflow run id. */
   send(notification: NotificationSend): Promise<string>;
   /** What the browser adapter needs to connect to this person's Notification Feed. */
   feedCredentials(userId: number): Promise<FeedCredentials>;
+  /**
+   * Marks read what that send put in that person's Notification Feed, and
+   * nobody else's. Resolves once it's read, including when it already was,
+   * and Cadence doesn't ask about it again. Throws if it can't be marked, and
+   * Cadence asks again the next time the person opens its page.
+   */
+  markRead(mark: NotificationReadMark): Promise<void>;
 }
 
 // ─── The fake ───
-// Keeps Notifications in memory: tests check what was sent, and the dev-only
-// route api/fake-notification-feed serves each person's Notification Feed to
-// the fake browser client. Email it's asked for goes to each recipient through
-// `mail`, which is the .outbox/ transport for the fake Cadence uses. Without
-// `mail`, email is only recorded in `sent`.
+// Keeps Notifications in memory: tests check what was sent and marked read,
+// and the dev-only route api/fake-notification-feed serves each person's
+// Notification Feed to the fake browser client. Email it's asked for goes to
+// each recipient through `mail`, which is the .outbox/ transport for the fake
+// Cadence uses. Without `mail`, email is only recorded in `sent`.
 
 const FEED_PAGE_SIZE = 20;
 
@@ -68,14 +79,17 @@ export type FakeNotificationFeed = {
 };
 
 export type FakeNotificationProvider = NotificationProvider & {
-  /** Every send, oldest first. */
-  readonly sent: NotificationSend[];
+  /** Every send, oldest first, with the workflow run id it returned. */
+  readonly sent: (NotificationSend & { workflowRunId: string })[];
+  /** Every markRead, oldest first. */
+  readonly markedRead: NotificationReadMark[];
   /** One person's Notification Feed. */
   feedOf(userId: number): FakeNotificationFeed;
 };
 
 // Each recipient gets their own copy of a send, with its own read state.
 type Delivered = {
+  workflowRunId: string;
   recipientId: number;
   notification: Notification;
 };
@@ -83,7 +97,8 @@ type Delivered = {
 export function createFakeNotificationProvider(
   mail?: MailTransport
 ): FakeNotificationProvider {
-  const sent: NotificationSend[] = [];
+  const sent: FakeNotificationProvider["sent"] = [];
+  const markedRead: NotificationReadMark[] = [];
   const delivered: Delivered[] = [];
 
   function newestFirst(userId: number) {
@@ -95,13 +110,18 @@ export function createFakeNotificationProvider(
 
   return {
     sent,
+    markedRead,
 
     async send(notification) {
-      sent.push(notification);
+      // Unique across restarts of the dev server, which empty the fake but
+      // not the database that stores these ids.
+      const workflowRunId = `fake-run-${randomUUID()}`;
+      sent.push({ ...notification, workflowRunId });
       const { summary, excerpt, context, url } = notification.content;
       const insertedAt = new Date().toISOString();
       for (const recipient of notification.recipients) {
         delivered.push({
+          workflowRunId,
           recipientId: recipient.id,
           notification: {
             id: String(delivered.length + 1),
@@ -122,11 +142,24 @@ export function createFakeNotificationProvider(
           await mail.send({ to: recipient.email, ...email });
         }
       }
-      return `fake-run-${sent.length}`;
+      return workflowRunId;
     },
 
     async feedCredentials(userId) {
       return { provider: "fake", userId };
+    },
+
+    async markRead({ workflowRunId, userId }) {
+      markedRead.push({ workflowRunId, userId });
+      const now = new Date().toISOString();
+      for (const copy of delivered) {
+        if (
+          copy.workflowRunId === workflowRunId &&
+          copy.recipientId === userId
+        ) {
+          copy.notification.readAt ??= now;
+        }
+      }
     },
 
     feedOf(userId) {

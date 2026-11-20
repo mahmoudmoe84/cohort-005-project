@@ -25,6 +25,7 @@ import {
   type SeatAvailability,
 } from "~/lib/refunds.server";
 import { formatPrice } from "~/lib/utils";
+import { markNotificationsRead } from "~/lib/notifications.server";
 
 function getTeamForAdmin(userId: number) {
   const membership = db
@@ -94,6 +95,10 @@ export async function loader({ request }: Route.LoaderArgs) {
       status: 403,
     });
   }
+
+  // Seat claimed Notifications link here, so the Team Admin's are read,
+  // however they got here. This never throws.
+  await markNotificationsRead(db, currentUserId, { page: "team" });
 
   const allCoupons = getCouponsForTeam(team.id);
 

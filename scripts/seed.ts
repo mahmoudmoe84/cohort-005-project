@@ -63,8 +63,11 @@ function makeRandom(seed: number): () => number {
 async function seed() {
   console.log("Seeding database...");
 
-  // Drop and recreate tables for a clean seed
+  // Drop and recreate tables for a clean seed. sent_notifications is left
+  // empty: it records Notifications as Cadence sends them, and the seed sends
+  // none. The fake Notification Provider starts empty too, with the dev server.
   sqlite.exec(`
+    DROP TABLE IF EXISTS sent_notifications;
     DROP TABLE IF EXISTS comments;
     DROP TABLE IF EXISTS course_ratings;
     DROP TABLE IF EXISTS video_watch_events;

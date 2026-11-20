@@ -18,6 +18,7 @@ import { eq } from "drizzle-orm";
 import { formatPrice } from "~/lib/utils";
 import { listRefundRequestsForBuyer } from "~/lib/refunds.server";
 import { NOTIFICATION_SETTINGS_URL } from "~/lib/notifications";
+import { markNotificationsRead } from "~/lib/notifications.server";
 
 const settingsSchema = z.object({
   name: z.string().trim().min(1, "Name cannot be empty."),
@@ -51,6 +52,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const refundRequests = listRefundRequestsForBuyer(db, currentUserId);
+
+  // The buyer's Refund Requests are on this page, so their Refund Request
+  // decided Notifications are read, however they got here. This never throws.
+  await markNotificationsRead(db, currentUserId, { page: "refund-requests" });
 
   return {
     user: {
