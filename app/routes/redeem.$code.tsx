@@ -7,6 +7,7 @@ import { getCurrentUserId } from "~/lib/session";
 import { resolveCountry } from "~/lib/country.server";
 import { parseParams, parseFormData } from "~/lib/validation";
 import { getSeatAvailability } from "~/lib/refunds.server";
+import { notifySeatClaimed } from "~/lib/notifications.server";
 import { Card, CardContent } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Ticket, AlertCircle, CheckCircle2, Globe } from "lucide-react";
@@ -41,7 +42,7 @@ const SEAT_REFUNDED =
   "This seat is no longer available. Ask the person who shared it with you.";
 
 type RedeemResult =
-  | { ok: true; enrollment: typeof enrollments.$inferSelect }
+  | { ok: true; seatId: number; enrollment: typeof enrollments.$inferSelect }
   | { ok: false; error: string };
 
 function redeemCoupon(
@@ -109,7 +110,7 @@ function redeemCoupon(
     .returning()
     .get();
 
-  return { ok: true, enrollment };
+  return { ok: true, seatId: coupon.id, enrollment };
 }
 
 const redeemParamsSchema = z.object({
@@ -203,6 +204,10 @@ export async function action({ params, request }: Route.ActionArgs) {
   if (!result.ok) {
     return data({ error: result.error }, { status: 400 });
   }
+
+  // Once the claim is saved. This never throws, so a failed send can't keep
+  // the Student out of the course.
+  await notifySeatClaimed(db, result.seatId);
 
   const course = getCourseById(result.enrollment.courseId);
   if (!course) {
