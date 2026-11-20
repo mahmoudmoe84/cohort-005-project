@@ -14,8 +14,18 @@ export async function loader({ request }: Route.LoaderArgs) {
     throw data("Select a user from the DevUI panel.", { status: 401 });
   }
 
+  // The layout opens the page without the bell when this fails, but here
+  // there's nothing else to give. The failure is already logged.
+  const credentials = await notificationFeedCredentials(userId);
+  if (credentials === null) {
+    throw data("The Notification Provider can't give credentials right now.", {
+      status: 503,
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+
   return Response.json(
-    { credentials: await notificationFeedCredentials(userId) },
+    { credentials },
     { headers: { "Cache-Control": "no-store" } }
   );
 }

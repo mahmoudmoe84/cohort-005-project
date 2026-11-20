@@ -132,6 +132,6 @@ Neither has been checked against a live Knock account. What Knock's docs and sou
 - Knock runs workflows asynchronously. A page opened in the moment after a send can come before the in-app message exists. Cadence then asks again the next time the page opens, which uses one of the three tries.
 - Opening a page waits for Knock at most a second, however many Notifications it marks read. Marks that take longer finish in the background, and the bell shows them after the next navigation.
 - Knock always sends an HTML part with email, while spec #28 asks for plain text only. Whether a Postmark payload override can drop it isn't known.
-- The user token lasts an hour. Before it runs out, the browser asks `/api/notification-feed-credentials` for a fresh one.
+- The user token lasts an hour. Before it runs out, the browser asks `/api/notification-feed-credentials` for a fresh one. If Cadence can't sign one, the route answers 503 and the browser logs it. The bell then stops updating once the old token runs out, until the next full page load.
 - Knock's client drops the socket 30 seconds after the tab is hidden. Notifications that arrive meanwhile appear after the next navigation or with the next arrival.
 - Knock's client skips fetching an arrival while it's already fetching. The badge still counts it, but it doesn't pop up, and it joins the list at the next navigation.

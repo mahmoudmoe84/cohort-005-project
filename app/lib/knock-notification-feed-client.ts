@@ -61,16 +61,24 @@ const freshCredentialsSchema = z.object({
 });
 
 // Knock asks for this shortly before the user token runs out. Cadence signs a
-// new one for whoever is signed in, which has to be the same person.
+// new one for whoever is signed in, which has to be the same person. It never
+// throws. When Cadence can't give a token, as with the 503 it answers while
+// the Notification Provider fails, it logs why and gives none, and Knock
+// keeps the old token until it runs out.
 async function freshUserToken(userId: string): Promise<string | undefined> {
   try {
     const response = await fetch(FEED_CREDENTIALS_URL);
-    if (!response.ok) return undefined;
-    const fresh = freshCredentialsSchema.safeParse(await response.json());
-    if (!fresh.success || fresh.data.credentials.userId !== userId) {
+    if (!response.ok) {
+      console.error(
+        `Couldn't get a fresh Knock user token: Cadence answered ${response.status}`
+      );
       return undefined;
     }
-    return fresh.data.credentials.userToken;
+    const { credentials } = freshCredentialsSchema.parse(await response.json());
+    // A different person is signed in now, as after a DevUI user switch in
+    // another tab, and their token mustn't reach this person's client.
+    if (credentials.userId !== userId) return undefined;
+    return credentials.userToken;
   } catch (error) {
     console.error("Couldn't get a fresh Knock user token", error);
     return undefined;
