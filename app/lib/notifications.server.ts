@@ -2,9 +2,14 @@ import { eq } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
 import { comments, courses, lessons, users } from "~/db/schema";
-import type { SummaryPart } from "~/lib/notifications";
+import {
+  NOTIFICATION_SETTINGS_URL,
+  type SummaryPart,
+} from "~/lib/notifications";
+import { absoluteUrl } from "~/lib/app-url.server";
 import {
   configuredNotificationProvider,
+  type NotificationEmail,
   type NotificationProvider,
 } from "~/lib/notification-provider.server";
 
@@ -29,6 +34,7 @@ function getCommentWithAuthor(db: Db, commentId: number) {
       authorName: users.name,
       authorEmail: users.email,
       authorAvatarUrl: users.avatarUrl,
+      authorEmailAndPopUps: users.emailAndPopUps,
     })
     .from(comments)
     .innerJoin(users, eq(comments.userId, users.id))
@@ -74,6 +80,46 @@ function discussionReplySummary(
     { text: " replied to your Discussion Question on " },
     { text: lesson?.title ?? course.title, strong: true },
   ];
+}
+
+type CommentWithAuthor = NonNullable<ReturnType<typeof getCommentWithAuthor>>;
+
+// Plain text, like Cadence's other transactional email. The switch can stop
+// this email, so it ends with a footer line linking to Notification settings.
+function discussionReplyEmail(
+  question: CommentWithAuthor,
+  reply: CommentWithAuthor,
+  course: Course,
+  lesson: Lesson | undefined
+): NotificationEmail {
+  const where = lesson
+    ? `"${lesson.title}" in "${course.title}"`
+    : `"${course.title}"`;
+
+  return {
+    subject: `${reply.authorName} replied to your Discussion Question on ${lesson?.title ?? course.title}`,
+    body: [
+      `Hi ${question.authorName},`,
+      "",
+      `${reply.authorName} replied to your Discussion Question on ${where}:`,
+      "",
+      quote(reply.body),
+      "",
+      `View it on Cadence: ${absoluteUrl(discussionLink(course, lesson, reply.id))}`,
+      "",
+      "— The Cadence team",
+      "",
+      `To stop these emails, turn off email and pop-ups in Notification settings: ${absoluteUrl(NOTIFICATION_SETTINGS_URL)}`,
+    ].join("\n"),
+  };
+}
+
+// Plain-text email quotes a passage by starting each of its lines with ">".
+function quote(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => (line === "" ? ">" : `> ${line}`))
+    .join("\n");
 }
 
 // Every comment on the lesson page carries an id="comment-<id>" anchor.
@@ -124,6 +170,10 @@ export async function notifyDiscussionReply(
         excerpt: reply.body,
         context: course.title,
         url: discussionLink(course, lesson, reply.id),
+        // The author's switch drops the email, and only the email.
+        email: question.authorEmailAndPopUps
+          ? discussionReplyEmail(question, reply, course, lesson)
+          : undefined,
       },
     });
   } catch (error) {

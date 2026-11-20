@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `email_and_pop_ups` integer DEFAULT true NOT NULL;

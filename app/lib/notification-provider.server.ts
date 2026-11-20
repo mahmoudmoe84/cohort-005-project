@@ -5,6 +5,7 @@ import type {
   NotificationKind,
   SummaryPart,
 } from "~/lib/notifications";
+import { outboxTransport, type MailTransport } from "~/lib/mailer.server";
 
 // ─── Notification Provider ───
 // The outside service that stores and delivers Notifications sits behind this
@@ -17,11 +18,19 @@ import type {
 
 export type NotificationRecipient = { id: number; email: string };
 
+/** Plain text, written by Cadence. The provider sends it as it is. */
+export type NotificationEmail = { subject: string; body: string };
+
 export type NotificationContent = {
   summary: SummaryPart[];
   excerpt: string | null;
   context: string;
   url: string;
+  /**
+   * Only when the Notification should go by email as well as in-app. Leaving
+   * it out is how the switch on Notification settings takes effect.
+   */
+  email?: NotificationEmail;
 };
 
 export type NotificationSend = {
@@ -41,7 +50,9 @@ export interface NotificationProvider {
 // ─── The fake ───
 // Keeps Notifications in memory: tests check what was sent, and the dev-only
 // route api/fake-notification-feed serves each person's Notification Feed to
-// the fake browser client.
+// the fake browser client. Email it's asked for goes to each recipient through
+// `mail`, which is the .outbox/ transport for the fake Cadence uses. Without
+// `mail`, email is only recorded in `sent`.
 
 const FEED_PAGE_SIZE = 20;
 
@@ -69,7 +80,9 @@ type Delivered = {
   notification: Notification;
 };
 
-export function createFakeNotificationProvider(): FakeNotificationProvider {
+export function createFakeNotificationProvider(
+  mail?: MailTransport
+): FakeNotificationProvider {
   const sent: NotificationSend[] = [];
   const delivered: Delivered[] = [];
 
@@ -102,6 +115,12 @@ export function createFakeNotificationProvider(): FakeNotificationProvider {
             readAt: null,
           },
         });
+      }
+      const { email } = notification.content;
+      if (email && mail) {
+        for (const recipient of notification.recipients) {
+          await mail.send({ to: recipient.email, ...email });
+        }
       }
       return `fake-run-${sent.length}`;
     },
@@ -164,7 +183,9 @@ const shared = globalThis as typeof globalThis & {
 /** The fake Cadence is using, or null when a real provider is configured. */
 export function configuredFakeNotificationProvider(): FakeNotificationProvider | null {
   if (process.env.KNOCK_API_KEY) return null;
-  shared.cadenceFakeNotificationProvider ??= createFakeNotificationProvider();
+  shared.cadenceFakeNotificationProvider ??= createFakeNotificationProvider(
+    outboxTransport(".outbox")
+  );
   return shared.cadenceFakeNotificationProvider;
 }
 
