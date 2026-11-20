@@ -1,12 +1,21 @@
 import { eq } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
-import { comments, courses, lessons, users } from "~/db/schema";
+import {
+  comments,
+  courses,
+  lessons,
+  purchases,
+  refunds,
+  users,
+  RefundStatus,
+} from "~/db/schema";
 import {
   NOTIFICATION_SETTINGS_URL,
   type SummaryPart,
 } from "~/lib/notifications";
 import { absoluteUrl } from "~/lib/app-url.server";
+import { formatPrice } from "~/lib/utils";
 import {
   configuredNotificationProvider,
   type NotificationEmail,
@@ -179,6 +188,134 @@ export async function notifyDiscussionReply(
   } catch (error) {
     console.error(
       `Couldn't send the Discussion Reply Notification for comment ${discussionReplyId}`,
+      error
+    );
+  }
+}
+
+// ─── Refund Request decided ───
+
+// The buyer is whoever paid: the Student for an Individual Purchase, the Team
+// Admin for a Team Licence.
+function getRefundRequestWithBuyer(db: Db, refundRequestId: number) {
+  return db
+    .select({
+      status: refunds.status,
+      decisionNote: refunds.decisionNote,
+      // Set once approved: the Refund, which is the full amount paid.
+      amountRefunded: refunds.amountRefunded,
+      decidedById: refunds.resolvedByUserId,
+      courseTitle: courses.title,
+      buyerId: users.id,
+      buyerName: users.name,
+      buyerEmail: users.email,
+    })
+    .from(refunds)
+    .innerJoin(purchases, eq(refunds.purchaseId, purchases.id))
+    .innerJoin(courses, eq(purchases.courseId, courses.id))
+    .innerJoin(users, eq(purchases.userId, users.id))
+    .where(eq(refunds.id, refundRequestId))
+    .get();
+}
+
+type RefundRequestWithBuyer = NonNullable<
+  ReturnType<typeof getRefundRequestWithBuyer>
+>;
+
+// The buyer's Refund Requests, on the settings page under the
+// id="refund-requests" anchor.
+const REFUND_REQUESTS_URL = "/settings#refund-requests";
+
+function refundRequestDecidedSummary(
+  refundRequest: RefundRequestWithBuyer
+): SummaryPart[] {
+  const yourRefundRequest: SummaryPart[] = [
+    { text: "Your Refund Request for " },
+    { text: refundRequest.courseTitle, strong: true },
+  ];
+
+  if (refundRequest.status !== RefundStatus.Approved) {
+    return [...yourRefundRequest, { text: " was declined." }];
+  }
+
+  return [
+    ...yourRefundRequest,
+    { text: " was approved. " },
+    { text: formatPrice(refundRequest.amountRefunded), strong: true },
+    { text: " is on its way back to you." },
+  ];
+}
+
+function refundRequestDecidedEmail(
+  refundRequest: RefundRequestWithBuyer
+): NotificationEmail {
+  const { courseTitle, decisionNote } = refundRequest;
+  const approved = refundRequest.status === RefundStatus.Approved;
+
+  const decision = approved
+    ? `Your Refund Request for "${courseTitle}" was approved. ${formatPrice(refundRequest.amountRefunded)} is on its way back to you.`
+    : `Your Refund Request for "${courseTitle}" was declined.`;
+  const note = decisionNote ? ["", decisionNote] : [];
+  const whatNext = approved
+    ? []
+    : [
+        "",
+        "You still have everything you bought. If something changes, you can raise a new Refund Request.",
+      ];
+
+  return {
+    subject: `Your Refund Request for ${courseTitle} was ${approved ? "approved" : "declined"}`,
+    body: [
+      `Hi ${refundRequest.buyerName},`,
+      "",
+      decision,
+      ...note,
+      ...whatNext,
+      "",
+      `See your Refund Requests on Cadence: ${absoluteUrl(REFUND_REQUESTS_URL)}`,
+      "",
+      "— The Cadence team",
+    ].join("\n"),
+  };
+}
+
+/**
+ * Tells the buyer that a Platform Admin approved or declined their Refund
+ * Request, in-app and by email. Call it once the decision is saved. It never
+ * throws: a failure is logged, so the decision still stands. The provider
+ * defaults to the configured one.
+ */
+export async function notifyRefundRequestDecided(
+  db: Db,
+  refundRequestId: number,
+  provider?: NotificationProvider
+): Promise<void> {
+  try {
+    const refundRequest = getRefundRequestWithBuyer(db, refundRequestId);
+    if (!refundRequest || refundRequest.status === RefundStatus.Open) return;
+
+    // Nobody hears about their own action.
+    if (refundRequest.decidedById === refundRequest.buyerId) return;
+
+    await (provider ?? configuredNotificationProvider()).send({
+      kind: "refund-request-decided",
+      recipients: [
+        { id: refundRequest.buyerId, email: refundRequest.buyerEmail },
+      ],
+      actor: null,
+      content: {
+        summary: refundRequestDecidedSummary(refundRequest),
+        excerpt: refundRequest.decisionNote,
+        context: refundRequest.courseTitle,
+        url: REFUND_REQUESTS_URL,
+        // Always, whatever the buyer's switch says: it carries the money
+        // details.
+        email: refundRequestDecidedEmail(refundRequest),
+      },
+    });
+  } catch (error) {
+    console.error(
+      `Couldn't send the Refund Request decided Notification for Refund Request ${refundRequestId}`,
       error
     );
   }

@@ -5,13 +5,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { createTestDb, seedBaseData } from "~/test/setup";
 import * as schema from "~/db/schema";
-import { UserRole } from "~/db/schema";
+import { TeamMemberRole, UserRole } from "~/db/schema";
 import { outboxTransport } from "~/lib/mailer.server";
 import {
   createFakeNotificationProvider,
   type NotificationProvider,
 } from "./notification-provider.server";
-import { notifyDiscussionReply } from "./notifications.server";
+import {
+  notifyDiscussionReply,
+  notifyRefundRequestDecided,
+} from "./notifications.server";
+import {
+  approveRefundRequest,
+  declineRefundRequest,
+  raiseRefundRequest,
+} from "./refunds.server";
 
 type TestDb = ReturnType<typeof createTestDb>;
 
@@ -429,6 +437,352 @@ describe("notifyDiscussionReply", () => {
           ),
         },
       ]);
+    });
+  });
+});
+
+describe("notifyRefundRequestDecided", () => {
+  let platformAdmin: typeof schema.users.$inferSelect;
+
+  beforeEach(() => {
+    platformAdmin = db
+      .insert(schema.users)
+      .values({
+        name: "Alex Rivera",
+        email: "alex@example.com",
+        role: UserRole.Admin,
+      })
+      .returning()
+      .get();
+  });
+
+  // An Individual Purchase: the buyer gets an Enrollment.
+  function buyForSelf(buyerId: number, amountPaid = 7900) {
+    const purchase = db
+      .insert(schema.purchases)
+      .values({ userId: buyerId, courseId: base.course.id, amountPaid })
+      .returning()
+      .get();
+    db.insert(schema.enrollments)
+      .values({ userId: buyerId, courseId: base.course.id })
+      .run();
+    return purchase;
+  }
+
+  // A Team Licence: Seats for others to claim, and no Enrollment for the Team
+  // Admin who bought it.
+  function buySeats(teamAdminId: number, seats: number) {
+    const team = db.insert(schema.teams).values({}).returning().get();
+    db.insert(schema.teamMembers)
+      .values({
+        teamId: team.id,
+        userId: teamAdminId,
+        role: TeamMemberRole.Admin,
+      })
+      .run();
+    const purchase = db
+      .insert(schema.purchases)
+      .values({
+        userId: teamAdminId,
+        courseId: base.course.id,
+        amountPaid: 7900 * seats,
+      })
+      .returning()
+      .get();
+    for (let seat = 1; seat <= seats; seat++) {
+      db.insert(schema.coupons)
+        .values({
+          teamId: team.id,
+          courseId: base.course.id,
+          code: `SEAT-${purchase.id}-${seat}`,
+          purchaseId: purchase.id,
+        })
+        .run();
+    }
+    return purchase;
+  }
+
+  function raise(purchaseId: number, buyerId: number) {
+    const result = raiseRefundRequest(
+      db,
+      purchaseId,
+      buyerId,
+      "It was more introductory than I expected.",
+      new Date()
+    );
+    if (!result.ok) throw new Error(result.error);
+    return result.refundRequestId;
+  }
+
+  function approve(refundRequestId: number, note: string | null = null) {
+    const result = approveRefundRequest(
+      db,
+      refundRequestId,
+      platformAdmin.id,
+      note,
+      new Date()
+    );
+    if (!result.ok) throw new Error(result.error);
+  }
+
+  function decline(refundRequestId: number, note: string) {
+    const result = declineRefundRequest(
+      db,
+      refundRequestId,
+      platformAdmin.id,
+      note,
+      new Date()
+    );
+    if (!result.ok) throw new Error(result.error);
+  }
+
+  it("tells the buyer once that their Refund Request was decided", async () => {
+    const provider = createFakeNotificationProvider();
+    const refundRequestId = raise(buyForSelf(liam.id).id, liam.id);
+    approve(refundRequestId);
+
+    await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        kind: "refund-request-decided",
+        recipients: [{ id: liam.id, email: "liam@example.com" }],
+      },
+    ]);
+  });
+
+  it("is signed by Cadence and says how much is on its way back once approved", async () => {
+    const provider = createFakeNotificationProvider();
+    const refundRequestId = raise(buyForSelf(liam.id, 7900).id, liam.id);
+    approve(refundRequestId);
+
+    await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        actor: null,
+        content: {
+          summary: [
+            { text: "Your Refund Request for " },
+            { text: "Test Course", strong: true },
+            { text: " was approved. " },
+            { text: "$79.00", strong: true },
+            { text: " is on its way back to you." },
+          ],
+          excerpt: null,
+          context: "Test Course",
+        },
+      },
+    ]);
+  });
+
+  it("says it was declined, with the Platform Admin's note as the excerpt", async () => {
+    const provider = createFakeNotificationProvider();
+    const refundRequestId = raise(buyForSelf(liam.id).id, liam.id);
+    decline(refundRequestId, "You've finished more than half the course.");
+
+    await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+    expect(provider.sent).toMatchObject([
+      {
+        actor: null,
+        content: {
+          summary: [
+            { text: "Your Refund Request for " },
+            { text: "Test Course", strong: true },
+            { text: " was declined." },
+          ],
+          excerpt: "You've finished more than half the course.",
+          context: "Test Course",
+        },
+      },
+    ]);
+  });
+
+  it("links to the buyer's Refund Requests in settings", async () => {
+    const provider = createFakeNotificationProvider();
+    const refundRequestId = raise(buyForSelf(liam.id).id, liam.id);
+    approve(refundRequestId);
+
+    await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+    expect(provider.sent).toMatchObject([
+      { content: { url: "/settings#refund-requests" } },
+    ]);
+  });
+
+  it("goes to the Team Admin who bought a Team Licence", async () => {
+    const provider = createFakeNotificationProvider();
+    const teamAdmin = addStudent("Ava Nakamura");
+    const teamLicence = buySeats(teamAdmin.id, 3);
+    const refundRequestId = raise(teamLicence.id, teamAdmin.id);
+    approve(refundRequestId);
+
+    await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+    expect(provider.sent).toMatchObject([
+      { recipients: [{ id: teamAdmin.id, email: "ava@example.com" }] },
+    ]);
+  });
+
+  it("sends nothing when the Platform Admin decided their own Refund Request", async () => {
+    const provider = createFakeNotificationProvider();
+    const refundRequestId = raise(
+      buyForSelf(platformAdmin.id).id,
+      platformAdmin.id
+    );
+    approve(refundRequestId);
+
+    await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+    expect(provider.sent).toEqual([]);
+  });
+
+  it("sends nothing while the Refund Request is still open", async () => {
+    const provider = createFakeNotificationProvider();
+    const refundRequestId = raise(buyForSelf(liam.id).id, liam.id);
+
+    await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+    expect(provider.sent).toEqual([]);
+  });
+
+  it("logs a failed send and still returns normally", async () => {
+    const failure = new Error("The Notification Provider is down");
+    const failingProvider: NotificationProvider = {
+      async send() {
+        throw failure;
+      },
+      async feedCredentials(userId) {
+        return { provider: "fake", userId };
+      },
+    };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const refundRequestId = raise(buyForSelf(liam.id).id, liam.id);
+    approve(refundRequestId);
+
+    await expect(
+      notifyRefundRequestDecided(db, refundRequestId, failingProvider)
+    ).resolves.toBeUndefined();
+
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining(`Refund Request ${refundRequestId}`),
+      failure
+    );
+  });
+
+  describe("by email", () => {
+    beforeEach(() => {
+      vi.stubEnv("APP_URL", "https://cadence.test");
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    // It carries the money details, so the switch can't stop it.
+    it("goes by email even while the buyer's switch is off", async () => {
+      const provider = createFakeNotificationProvider();
+      turnOffEmailAndPopUps(liam.id);
+      const refundRequestId = raise(buyForSelf(liam.id).id, liam.id);
+      approve(refundRequestId);
+
+      await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+      expect(provider.sent).toMatchObject([
+        {
+          recipients: [{ id: liam.id, email: "liam@example.com" }],
+          content: {
+            email: {
+              subject: "Your Refund Request for Test Course was approved",
+            },
+          },
+        },
+      ]);
+    });
+
+    it("says how much is on its way back and links to the buyer's Refund Requests", async () => {
+      const provider = createFakeNotificationProvider();
+      const refundRequestId = raise(buyForSelf(liam.id, 7900).id, liam.id);
+      approve(refundRequestId);
+
+      await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+      const [send] = provider.sent;
+      expect(send.content.email).toEqual({
+        subject: "Your Refund Request for Test Course was approved",
+        body: [
+          "Hi Liam Thompson,",
+          "",
+          'Your Refund Request for "Test Course" was approved. $79.00 is on its way back to you.',
+          "",
+          "See your Refund Requests on Cadence: https://cadence.test/settings#refund-requests",
+          "",
+          "— The Cadence team",
+        ].join("\n"),
+      });
+    });
+
+    it("gives the Platform Admin's note on a decline, and says what the buyer can do next", async () => {
+      const provider = createFakeNotificationProvider();
+      const refundRequestId = raise(buyForSelf(liam.id).id, liam.id);
+      decline(refundRequestId, "You've finished more than half the course.");
+
+      await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+      const [send] = provider.sent;
+      expect(send.content.email).toEqual({
+        subject: "Your Refund Request for Test Course was declined",
+        body: [
+          "Hi Liam Thompson,",
+          "",
+          'Your Refund Request for "Test Course" was declined.',
+          "",
+          "You've finished more than half the course.",
+          "",
+          "You still have everything you bought. If something changes, you can raise a new Refund Request.",
+          "",
+          "See your Refund Requests on Cadence: https://cadence.test/settings#refund-requests",
+          "",
+          "— The Cadence team",
+        ].join("\n"),
+      });
+    });
+
+    it("passes on a note the Platform Admin left on an approval, in-app and by email", async () => {
+      const provider = createFakeNotificationProvider();
+      const refundRequestId = raise(buyForSelf(liam.id).id, liam.id);
+      approve(refundRequestId, "Sorry it wasn't the right fit.");
+
+      await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+      expect(provider.sent).toMatchObject([
+        {
+          content: {
+            excerpt: "Sorry it wasn't the right fit.",
+            email: {
+              body: expect.stringContaining(
+                "is on its way back to you.\n\nSorry it wasn't the right fit.\n"
+              ),
+            },
+          },
+        },
+      ]);
+    });
+
+    // The switch can't stop this email, so there is nothing to turn off.
+    it("has no footer linking to Notification settings", async () => {
+      const provider = createFakeNotificationProvider();
+      const refundRequestId = raise(buyForSelf(liam.id).id, liam.id);
+      approve(refundRequestId);
+
+      await notifyRefundRequestDecided(db, refundRequestId, provider);
+
+      const [send] = provider.sent;
+      expect(send.content.email?.body).not.toContain("Notification settings");
+      expect(send.content.email?.body.split("\n").at(-1)).toBe(
+        "— The Cadence team"
+      );
     });
   });
 });
