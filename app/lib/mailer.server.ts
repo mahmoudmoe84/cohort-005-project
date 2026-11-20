@@ -7,6 +7,8 @@ import { join } from "node:path";
 // instead, so it can be read without sending anything.
 
 export type Email = {
+  /** Who it's from, when it isn't Cadence's usual address, FROM_ADDRESS. */
+  from?: string;
   to: string;
   subject: string;
   body: string;
@@ -29,7 +31,7 @@ export function postmarkTransport(serverToken: string): MailTransport {
           "X-Postmark-Server-Token": serverToken,
         },
         body: JSON.stringify({
-          From: FROM_ADDRESS,
+          From: email.from ?? FROM_ADDRESS,
           To: email.to,
           Subject: email.subject,
           TextBody: email.body,
@@ -53,7 +55,16 @@ export function outboxTransport(directory: string): MailTransport {
       const file = join(directory, `${Date.now()}-${email.to}.json`);
       writeFileSync(
         file,
-        JSON.stringify({ from: FROM_ADDRESS, ...email }, null, 2)
+        JSON.stringify(
+          {
+            from: email.from ?? FROM_ADDRESS,
+            to: email.to,
+            subject: email.subject,
+            body: email.body,
+          },
+          null,
+          2
+        )
       );
     },
   };

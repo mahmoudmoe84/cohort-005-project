@@ -14,6 +14,7 @@ import {
 } from "./notification-provider.server";
 import {
   markNotificationsRead,
+  notificationFeedCredentials,
   notifyDiscussionQuestion,
   notifyDiscussionReply,
   notifyOpenRefundRequest,
@@ -189,8 +190,8 @@ function failingProvider(failure: Error): NotificationProvider {
     async send() {
       throw failure;
     },
-    async feedCredentials(userId) {
-      return { provider: "fake", userId };
+    async feedCredentials() {
+      throw failure;
     },
     async markRead() {
       throw failure;
@@ -536,6 +537,29 @@ describe("notifyDiscussionReply", () => {
           body: expect.stringContaining(
             "> I switched to unions and never looked back."
           ),
+        },
+      ]);
+    });
+
+    it("comes from support@superhumanai.tech, like Notification email through Knock", async () => {
+      const outbox = mkdtempSync(join(tmpdir(), "outbox-"));
+      const provider = createFakeNotificationProvider(outboxTransport(outbox));
+      const question = askDiscussionQuestion(
+        liam.id,
+        "When should I reach for a union instead of an enum?"
+      );
+      const reply = postDiscussionReply(
+        base.instructor.id,
+        question.id,
+        "Most of the time. Unions need no runtime code."
+      );
+
+      await notifyDiscussionReply(db, base.course.id, reply.id, provider);
+
+      expect(readOutbox(outbox)).toMatchObject([
+        {
+          from: "Cadence <support@superhumanai.tech>",
+          to: "liam@example.com",
         },
       ]);
     });
@@ -1538,5 +1562,29 @@ describe("markNotificationsRead", () => {
     expect(readStates(provider, liam.id)).toEqual([
       { kind: "discussion-reply", read: true },
     ]);
+  });
+});
+
+describe("notificationFeedCredentials", () => {
+  it("gives what the browser needs to connect to the person's Notification Feed", async () => {
+    const provider = createFakeNotificationProvider();
+
+    await expect(
+      notificationFeedCredentials(liam.id, provider)
+    ).resolves.toEqual({ provider: "fake", userId: liam.id });
+  });
+
+  it("logs a failure and gives null, so the page still opens without the bell", async () => {
+    const failure = new Error("Invalid signing key format");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      notificationFeedCredentials(liam.id, failingProvider(failure))
+    ).resolves.toBeNull();
+
+    expect(logged).toHaveBeenCalledWith(
+      expect.stringContaining(`user ${liam.id}`),
+      failure
+    );
   });
 });

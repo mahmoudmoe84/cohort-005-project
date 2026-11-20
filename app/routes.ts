@@ -56,4 +56,8 @@ export default [
   route("api/video-tracking", "routes/api.video-tracking.ts"),
   route("api/set-dev-country", "routes/api.set-dev-country.ts"),
   route("api/fake-notification-feed", "routes/api.fake-notification-feed.ts"),
+  route(
+    "api/notification-feed-credentials",
+    "routes/api.notification-feed-credentials.ts"
+  ),
 ] satisfies RouteConfig;

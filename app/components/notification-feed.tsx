@@ -323,11 +323,15 @@ export function NotificationFeedProvider({
         );
       },
 
+      // Counts once the page is back, because a provider's count can come
+      // from its latest page.
       refresh() {
-        refreshUnreadCount();
-        client.fetchPage().then((page) => {
-          if (connected) dispatch({ type: "newest-page-refreshed", page });
-        }, logFeedError);
+        client
+          .fetchPage()
+          .then((page) => {
+            if (connected) dispatch({ type: "newest-page-refreshed", page });
+          }, logFeedError)
+          .then(refreshUnreadCount);
       },
     });
 
