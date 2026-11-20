@@ -3,7 +3,7 @@
 //
 // Verdict: A, with the badge counting unread (not Knock's default unseen), A's
 // sonner toast for the live pop-up, and a new Discussion Question linking to
-// the Instructor's Questions page. B and C stay here for reference only.
+// the lesson it was asked on. B and C stay here for reference only.
 //
 // Plan: three variants of the bell, the Notification Feed and the live pop-up,
 // mounted in the real app shell (layout.app.tsx) on every page, switched with

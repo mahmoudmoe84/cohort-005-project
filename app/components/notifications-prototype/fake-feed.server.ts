@@ -377,8 +377,9 @@ function discussionQuestionDraft(
     ],
     excerpt: row.body,
     context: row.courseTitle,
-    // Decided in issue #17: the Instructor's Questions page, not the lesson.
-    url: "/instructor/questions",
+    // Decided in issue #17: the lesson it was asked on, inside the course.
+    // (The Instructor's Questions page was considered and dropped.)
+    url: lessonUrl(row.courseSlug, row.lessonId),
     alwaysDelivered: false,
   };
 }
