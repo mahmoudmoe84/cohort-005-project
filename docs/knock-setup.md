@@ -11,17 +11,18 @@ To use Knock, a person with access to Knock's and Postmark's dashboards does the
 
 ## 1. Environment variables
 
-| Variable                | Value                                                      | Notes                                                                                         |
-| ----------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `KNOCK_API_KEY`         | The environment's secret key (`sk_…`)                      | Server only. Setting it switches Cadence from the fake to Knock.                              |
-| `KNOCK_PUBLIC_API_KEY`  | The environment's public key (`pk_…`)                      | Sent to the browser. Cadence refuses a value that doesn't start with `pk_`.                   |
-| `KNOCK_FEED_CHANNEL_ID` | The in-app feed channel's id (a UUID)                      | Used by the server to find messages and by the browser to read the feed.                      |
-| `KNOCK_SIGNING_KEY`     | The environment's signing key                              | Signs the user token the browser shows Knock. Required once enhanced security is on (step 5). |
-| `APP_URL`               | Cadence's public origin, such as `https://cadence.example` | Notification email links are built from it. Without it they point at `http://localhost:5173`. |
+| Variable                | Value                                                      | Notes                                                                                           |
+| ----------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `KNOCK_API_KEY`         | The environment's secret key (`sk_…`)                      | Server only. Setting it switches Cadence from the fake to Knock.                                |
+| `KNOCK_PUBLIC_API_KEY`  | The environment's public key (`pk_…`)                      | Sent to the browser. Cadence refuses a value that doesn't start with `pk_`.                     |
+| `KNOCK_FEED_CHANNEL_ID` | The in-app feed channel's id (a UUID)                      | Used by the server to find messages and by the browser to read the feed.                        |
+| `KNOCK_SIGNING_KEY`     | The environment's signing key                              | Required. Signs the user token the browser shows Knock, which enhanced security needs (step 5). |
+| `APP_URL`               | Cadence's public origin, such as `https://cadence.example` | Notification email links are built from it. Without it they point at `http://localhost:5173`.   |
 
 - The keys and the signing key are under **Platform > API keys** in Knock's dashboard. Knock shows the signing key only once.
 - Use the base64 form of the signing key, which starts `LS0tLS1CRUdJTi`, so it fits on one line.
 - The signing key must be PKCS#8, so it decodes to `-----BEGIN PRIVATE KEY-----`. If it decodes to `-----BEGIN RSA PRIVATE KEY-----` (PKCS#1), convert it once with `openssl pkcs8 -topk8 -nocrypt -in key.pem`. Otherwise every page logs `Couldn't get the Notification Feed credentials` and shows no bell.
+- Without `KNOCK_SIGNING_KEY`, Cadence fails closed: it gives the browser no Notification Feed credentials, so there's no bell, and every page logs `Couldn't get the Notification Feed credentials` with the reason. Notifications are still sent and emailed.
 - Locally, put them in `.env`, which is gitignored; `npm run dev` loads it. In production, set them in the host's environment.
 
 ## 2. Email through Postmark
@@ -92,9 +93,9 @@ These are the fields each trigger's `data` carries:
 
 Recipients carry only the person's id and email address. Cadence doesn't use Knock's `actor` field, because Knock would show everything it holds about an actor, including their email address, to each recipient's browser.
 
-## 5. Production only
+## 5. Enhanced security, in every environment
 
-Turn on **enhanced security** under **Platform > API keys**, with `KNOCK_SIGNING_KEY` set. Without it, Knock's public key can read anyone's feed. Development can leave it off.
+Turn on **enhanced security** under **Platform > API keys**, in Development and in Production alike, with `KNOCK_SIGNING_KEY` set. Without it, Knock's public key can read anyone's feed, whatever Cadence does. Knock suggests Development can leave it off; Cadence doesn't, because the public key reaches every signed-in browser in both.
 
 ## 6. Check it in Development
 
@@ -115,7 +116,8 @@ Then check each of these:
 3. Clicking a Notification, and "Mark all as read", mark them read in Knock's message log. "Mark all as read" must leave another person's Notifications unread: Knock's client scopes it with `user_ids`, which Knock's API reference doesn't list.
 4. Opening the page a Notification links to (from its email, say) marks it read in Knock.
 5. A DevUI user switch shows the new person's Notifications.
-6. The two open questions below. Record the results on issue #36.
+6. Enhanced security is on: Knock refuses `GET /v1/users/{user_id}/feeds/{channel_id}` sent with the public key and no user token.
+7. The two open questions below. Record the results on issue #36.
 
 ## Open questions
 

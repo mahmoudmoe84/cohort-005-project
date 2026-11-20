@@ -51,10 +51,6 @@ export type FeedCredentials =
       publicApiKey: string;
       /** The id of Knock's in-app feed channel. */
       feedChannelId: string;
-      /**
-       * Proves to Knock who the browser is acting for. Null when Cadence has
-       * no signing key, which only works while Knock's enhanced security is
-       * off.
-       */
-      userToken: string | null;
+      /** Proves to Knock who the browser is acting for. */
+      userToken: string;
     };

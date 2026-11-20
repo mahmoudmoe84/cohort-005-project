@@ -97,16 +97,12 @@ export function connectKnockNotificationFeed(
   credentials: KnockFeedCredentials
 ): NotificationFeedClient {
   const knock = new Knock(credentials.publicApiKey);
-  knock.authenticate(
-    { id: credentials.userId },
-    credentials.userToken ?? undefined,
-    {
-      // Cadence's server registers people with Knock when it sends to them,
-      // so the browser doesn't.
-      identificationStrategy: "skip",
-      onUserTokenExpiring: () => freshUserToken(credentials.userId),
-    }
-  );
+  knock.authenticate({ id: credentials.userId }, credentials.userToken, {
+    // Cadence's server registers people with Knock when it sends to them,
+    // so the browser doesn't.
+    identificationStrategy: "skip",
+    onUserTokenExpiring: () => freshUserToken(credentials.userId),
+  });
   // Rich mode keeps the summary's parts in each item's data. Knock's default,
   // compact, drops arrays and objects from it.
   const feed = knock.feeds.initialize(credentials.feedChannelId, {
