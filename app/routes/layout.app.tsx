@@ -3,6 +3,18 @@ import type { Route } from "./+types/layout.app";
 import { Sidebar } from "~/components/sidebar";
 import { DevUI } from "~/components/dev-ui";
 import { Toaster } from "sonner";
+import { PrototypeSwitcher } from "~/components/prototype-switcher";
+import {
+  NotificationsPrototypeControls,
+  NotificationsPrototypeProvider,
+  PROTOTYPE_VARIANT_COOKIE,
+  PROTOTYPE_VARIANTS,
+  readPrototypeVariant,
+  VariantABell,
+  VariantBTopBar,
+  VariantCNavItem,
+} from "~/components/notifications-prototype";
+import { buildPrototypeFeed } from "~/components/notifications-prototype/fake-feed.server";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { eq, and, or, sql, desc } from "drizzle-orm";
@@ -213,6 +225,11 @@ export async function loader({ request }: Route.LoaderArgs) {
     countryTierInfo,
     countries: COUNTRIES,
     isTeamAdmin: currentUserId ? isTeamAdmin(currentUserId) : false,
+    // PROTOTYPE: Notifications look (issue #17). Throwaway.
+    prototypeVariant: readPrototypeVariant(request),
+    prototypeFeed: currentUserId
+      ? buildPrototypeFeed(currentUserId)
+      : { feed: [], upcoming: [] },
   };
 }
 
@@ -225,16 +242,26 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
     countryTierInfo,
     countries,
     isTeamAdmin: userIsTeamAdmin,
+    prototypeVariant: variant,
+    prototypeFeed,
   } = loaderData;
+  const signedIn = currentUser !== null;
 
   return (
+    <NotificationsPrototypeProvider
+      key={currentUser?.id ?? "nobody"}
+      initial={prototypeFeed}
+    >
     <div className="flex h-screen overflow-hidden">
       <Sidebar
         currentUser={currentUser}
         recentCourses={recentCourses}
         isTeamAdmin={userIsTeamAdmin}
+        brandSlot={signedIn && variant === "A" ? <VariantABell /> : null}
+        navTopSlot={signedIn && variant === "C" ? <VariantCNavItem /> : null}
       />
       <main className="flex-1 overflow-y-auto">
+        {signedIn && variant === "B" && <VariantBTopBar />}
         <Outlet />
       </main>
       <DevUI
@@ -245,6 +272,16 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
         countries={countries}
       />
       <Toaster position="bottom-right" richColors closeButton />
+      {signedIn && (
+        <PrototypeSwitcher
+          variants={PROTOTYPE_VARIANTS}
+          current={variant}
+          cookieName={PROTOTYPE_VARIANT_COOKIE}
+        >
+          <NotificationsPrototypeControls />
+        </PrototypeSwitcher>
+      )}
     </div>
+    </NotificationsPrototypeProvider>
   );
 }

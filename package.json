@@ -10,6 +10,7 @@
     "pull": "ai-hero-cli pull --upstream=https://github.com/ai-hero-dev/cohort-005-project.git",
     "build": "react-router build",
     "dev": "react-router dev",
+    "prototype:notifications": "react-router dev --open '/courses?variant=A'",
     "start": "react-router-serve ./build/server/index.js",
     "request-logger": "tsx request-logger/proxy.ts",
     "typecheck": "react-router typegen && tsc",

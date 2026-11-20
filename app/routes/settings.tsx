@@ -17,6 +17,7 @@ import { db } from "~/db";
 import { eq } from "drizzle-orm";
 import { formatPrice } from "~/lib/utils";
 import { listRefundRequestsForBuyer } from "~/lib/refunds.server";
+import { NotificationSettingsCard } from "~/components/notifications-prototype";
 
 const settingsSchema = z.object({
   name: z.string().trim().min(1, "Name cannot be empty."),
@@ -187,6 +188,9 @@ export default function Settings({ loaderData }: Route.ComponentProps) {
           </fetcher.Form>
         </CardContent>
       </Card>
+
+      {/* PROTOTYPE: Notification settings look (issue #17). Throwaway. */}
+      <NotificationSettingsCard />
 
       {refundRequests.length > 0 && (
         <Card className="mt-8 max-w-md">
