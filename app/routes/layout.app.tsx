@@ -6,7 +6,7 @@ import {
   NotificationBell,
   NotificationFeedProvider,
 } from "~/components/notification-feed";
-import { Toaster } from "sonner";
+import { Toaster } from "~/components/ui/sonner";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
 import { configuredNotificationProvider } from "~/lib/notification-provider.server";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
@@ -251,8 +251,9 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
             <NotificationFeedProvider
               key={currentUser.id}
               credentials={feedCredentials}
+              emailAndPopUps={currentUser.emailAndPopUps}
             >
-              <NotificationBell emailAndPopUps={currentUser.emailAndPopUps} />
+              <NotificationBell />
             </NotificationFeedProvider>
           )
         }

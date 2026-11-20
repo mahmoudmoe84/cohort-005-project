@@ -3,16 +3,20 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useEffectEvent,
   useMemo,
+  useReducer,
+  useRef,
   useState,
 } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate, useRevalidator } from "react-router";
 import { Popover } from "radix-ui";
+import { toast } from "sonner";
 import { Bell, Settings } from "lucide-react";
 import { UserAvatar } from "~/components/user-avatar";
 import {
   connectNotificationFeed,
-  type NotificationFeedClient,
+  type NotificationPage,
 } from "~/lib/notification-feed-client";
 import {
   NOTIFICATION_SETTINGS_URL,
@@ -24,16 +28,147 @@ import {
 import { cn, formatRelativeTime } from "~/lib/utils";
 
 // ─── Notification Feed ───
-// The bell at the right of the sidebar's top row, and the popover Notification
-// Feed it opens. These are Cadence's own components over the
-// NotificationFeedClient interface, so they stay put when the Notification
-// Provider changes (ADR 0013).
+// The bell at the right of the sidebar's top row, the popover Notification
+// Feed it opens, and the live pop-up when a Notification arrives. These are
+// Cadence's own components over the NotificationFeedClient interface, so they
+// stay put when the Notification Provider changes (ADR 0013).
+
+/** How long a live pop-up stays on screen. */
+const POP_UP_MS = 6000;
+
+// ─── What the browser holds ───
+
+type FeedState = {
+  /** Every page loaded so far and everything that arrived since, newest first. */
+  notifications: Notification[];
+  status: "loading" | "ready" | "failed";
+  /** Where the next, older page starts, or null when there are no more. */
+  nextCursor: string | null;
+  unreadCount: number;
+};
+
+type FeedEvent =
+  | { type: "newest-page-loaded"; page: NotificationPage }
+  | { type: "newest-page-failed" }
+  | { type: "older-page-loaded"; page: NotificationPage }
+  | { type: "arrived"; notification: Notification }
+  | { type: "counted"; unreadCount: number }
+  | { type: "marked-read"; id: string; readAt: string }
+  | { type: "marked-all-read"; readAt: string };
+
+const initialFeedState: FeedState = {
+  notifications: [],
+  status: "loading",
+  nextCursor: null,
+  unreadCount: 0,
+};
+
+function withoutRepeats(notifications: Notification[]): Notification[] {
+  const ids = new Set<string>();
+  return notifications.filter((notification) => {
+    if (ids.has(notification.id)) return false;
+    ids.add(notification.id);
+    return true;
+  });
+}
+
+function feedReducer(state: FeedState, event: FeedEvent): FeedState {
+  switch (event.type) {
+    case "newest-page-loaded":
+      return {
+        ...state,
+        status: "ready",
+        // Anything that arrived before the page came back stays on top.
+        notifications: withoutRepeats([
+          ...state.notifications,
+          ...event.page.notifications,
+        ]),
+        nextCursor: event.page.nextCursor,
+      };
+
+    case "newest-page-failed":
+      return { ...state, status: "failed" };
+
+    case "older-page-loaded":
+      return {
+        ...state,
+        notifications: withoutRepeats([
+          ...state.notifications,
+          ...event.page.notifications,
+        ]),
+        nextCursor: event.page.nextCursor,
+      };
+
+    case "arrived": {
+      const { notification } = event;
+      if (state.notifications.some((known) => known.id === notification.id)) {
+        return state;
+      }
+      return {
+        ...state,
+        notifications: [notification, ...state.notifications],
+        unreadCount: state.unreadCount + (notification.readAt === null ? 1 : 0),
+      };
+    }
+
+    case "counted":
+      return { ...state, unreadCount: event.unreadCount };
+
+    case "marked-read": {
+      const target = state.notifications.find(
+        (notification) => notification.id === event.id
+      );
+      if (!target || target.readAt !== null) return state;
+      return {
+        ...state,
+        notifications: state.notifications.map((notification) =>
+          notification.id === event.id
+            ? { ...notification, readAt: event.readAt }
+            : notification
+        ),
+        unreadCount: Math.max(0, state.unreadCount - 1),
+      };
+    }
+
+    case "marked-all-read":
+      return {
+        ...state,
+        notifications: state.notifications.map((notification) =>
+          notification.readAt === null
+            ? { ...notification, readAt: event.readAt }
+            : notification
+        ),
+        unreadCount: 0,
+      };
+  }
+}
+
+// ─── The provider ───
 
 type NotificationFeed = {
-  /** The newest page, plus anything that arrived since. */
+  /** Newest first: what's loaded so far, plus anything that arrived since. */
   notifications: Notification[];
+  status: FeedState["status"];
+  /** Whether older Notifications are still to load. */
+  hasOlder: boolean;
   unreadCount: number;
-  markRead(notification: Notification): void;
+  /** The person's switch on Notification settings. */
+  emailAndPopUps: boolean;
+  /** Whether the Notification Feed is on screen. */
+  open: boolean;
+  setOpen(open: boolean): void;
+  loadOlder(): void;
+  markRead(id: string): void;
+  markAllRead(): void;
+  /** Marks it read, closes the feed and goes to what it's about. */
+  view(notification: Notification): void;
+};
+
+/** What one connection to the Notification Provider can be asked to do. */
+type FeedConnection = {
+  loadOlder(cursor: string): void;
+  markRead(id: string): void;
+  markAllRead(): void;
 };
 
 const NotificationFeedContext = createContext<NotificationFeed | null>(null);
@@ -43,86 +178,176 @@ function logFeedError(error: unknown) {
 }
 
 /**
- * Connects to one person's Notification Feed. Key it on the person, so a
- * DevUI user switch disconnects the old client and connects a new one.
+ * Connects to one person's Notification Feed and pops up what arrives. Key it
+ * on the person, so a DevUI user switch disconnects the old client, clears its
+ * pop-ups and connects a new one.
  */
 export function NotificationFeedProvider({
   credentials,
+  emailAndPopUps,
   children,
 }: {
   credentials: FeedCredentials;
+  /** The person's switch on Notification settings. */
+  emailAndPopUps: boolean;
   children: React.ReactNode;
 }) {
   // Every loader run hands over fresh credentials for the same person. The
   // key, not the credentials, decides when to reconnect.
   const [initialCredentials] = useState(credentials);
-  const [client, setClient] = useState<NotificationFeedClient | null>(null);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const [state, dispatch] = useReducer(feedReducer, initialFeedState);
+  const [connection, setConnection] = useState<FeedConnection | null>(null);
+  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  const { revalidate } = useRevalidator();
+
+  // A Notification about the page you're on links to it with only a new hash,
+  // and React Router doesn't load a page's data again for a hash change, so
+  // what just arrived wouldn't be there. Load it again, then bring the anchor
+  // into view.
+  const goTo = useCallback(
+    async (url: string) => {
+      const target = new URL(url, window.location.href);
+      const hashOnly =
+        target.pathname === window.location.pathname &&
+        target.search === window.location.search &&
+        target.hash !== "";
+      await navigate(url);
+      if (!hashOnly) return;
+      await revalidate();
+      scrollToAnchor(decodeURIComponent(target.hash.slice(1)));
+    },
+    [navigate, revalidate]
+  );
+
+  const view = useCallback(
+    (notification: Notification) => {
+      connection?.markRead(notification.id);
+      setOpen(false);
+      goTo(notification.url).catch(logFeedError);
+    },
+    [connection, goTo]
+  );
+
+  // Reads the switch and whether the Notification Feed is open as they are
+  // when the Notification arrives. Returns the pop-up's id, if it popped up.
+  const popUp = useEffectEvent((notification: Notification): string | null => {
+    if (!popsUp(notification, emailAndPopUps, open)) return null;
+    return showPopUp(notification, () => view(notification));
+  });
 
   useEffect(() => {
-    const feed = connectNotificationFeed(initialCredentials);
+    const client = connectNotificationFeed(initialCredentials);
     let connected = true;
+    let countsAsked = 0;
+    let loadingOlder = false;
+    const popUps = new Set<string>();
 
     function refreshUnreadCount() {
-      feed.unreadCount().then((count) => {
-        if (connected) setUnreadCount(count);
+      const asked = ++countsAsked;
+      client.unreadCount().then((unreadCount) => {
+        // Only the latest answer counts: an earlier one may predate a change.
+        if (connected && asked === countsAsked) {
+          dispatch({ type: "counted", unreadCount });
+        }
       }, logFeedError);
     }
 
-    feed.fetchPage().then((page) => {
-      if (connected) setNotifications(page.notifications);
-    }, logFeedError);
+    function markRead(id: string) {
+      dispatch({ type: "marked-read", id, readAt: new Date().toISOString() });
+      client.markRead(id).catch(logFeedError).then(refreshUnreadCount);
+    }
+
+    client.fetchPage().then(
+      (page) => {
+        if (connected) dispatch({ type: "newest-page-loaded", page });
+      },
+      (error) => {
+        logFeedError(error);
+        if (connected) dispatch({ type: "newest-page-failed" });
+      }
+    );
     refreshUnreadCount();
 
-    const stopArrivals = feed.onArrival((notification) => {
-      setNotifications((current) =>
-        current.some((existing) => existing.id === notification.id)
-          ? current
-          : [notification, ...current]
-      );
+    const stopArrivals = client.onArrival((notification) => {
+      dispatch({ type: "arrived", notification });
       refreshUnreadCount();
+      const popUpId = popUp(notification);
+      if (popUpId !== null) popUps.add(popUpId);
     });
 
-    setClient(feed);
+    setConnection({
+      markRead,
+
+      markAllRead() {
+        dispatch({ type: "marked-all-read", readAt: new Date().toISOString() });
+        client.markAllRead().catch(logFeedError).then(refreshUnreadCount);
+      },
+
+      loadOlder(cursor) {
+        if (loadingOlder) return;
+        loadingOlder = true;
+        client.fetchPage(cursor).then(
+          (page) => {
+            loadingOlder = false;
+            if (connected) dispatch({ type: "older-page-loaded", page });
+          },
+          (error) => {
+            loadingOlder = false;
+            logFeedError(error);
+          }
+        );
+      },
+    });
 
     return () => {
       connected = false;
       stopArrivals();
-      feed.disconnect();
+      client.disconnect();
+      // A pop-up never outlives its person's connection.
+      for (const id of popUps) toast.dismiss(id);
     };
   }, [initialCredentials]);
 
-  const markRead = useCallback(
-    (notification: Notification) => {
-      if (!client || notification.readAt !== null) return;
-
-      const readAt = new Date().toISOString();
-      setNotifications((current) =>
-        current.map((existing) =>
-          existing.id === notification.id ? { ...existing, readAt } : existing
-        )
-      );
-      setUnreadCount((count) => Math.max(0, count - 1));
-
-      client
-        .markRead(notification.id)
-        .then(() => client.unreadCount())
-        .then(setUnreadCount, logFeedError);
-    },
-    [client]
-  );
-
-  const value = useMemo(
-    () => ({ notifications, unreadCount, markRead }),
-    [notifications, unreadCount, markRead]
-  );
+  const value = useMemo<NotificationFeed>(() => {
+    const { nextCursor } = state;
+    return {
+      notifications: state.notifications,
+      status: state.status,
+      hasOlder: nextCursor !== null,
+      unreadCount: state.unreadCount,
+      emailAndPopUps,
+      open,
+      setOpen,
+      loadOlder() {
+        if (nextCursor !== null) connection?.loadOlder(nextCursor);
+      },
+      markRead(id) {
+        connection?.markRead(id);
+      },
+      markAllRead() {
+        connection?.markAllRead();
+      },
+      view,
+    };
+  }, [state, emailAndPopUps, open, connection, view]);
 
   return (
     <NotificationFeedContext.Provider value={value}>
       {children}
     </NotificationFeedContext.Provider>
   );
+}
+
+// The page renders its fresh data a moment after it loads, so look for the
+// anchor on each frame, for about a second.
+function scrollToAnchor(id: string, framesLeft = 60) {
+  const anchor = document.getElementById(id);
+  if (anchor) {
+    anchor.scrollIntoView();
+  } else if (framesLeft > 0) {
+    requestAnimationFrame(() => scrollToAnchor(id, framesLeft - 1));
+  }
 }
 
 function useNotificationFeed(): NotificationFeed {
@@ -133,19 +358,70 @@ function useNotificationFeed(): NotificationFeed {
   return feed;
 }
 
-export function NotificationBell({
-  emailAndPopUps,
-}: {
-  /** The person's switch on Notification settings. */
-  emailAndPopUps: boolean;
-}) {
+// ─── Live pop-ups ───
+
+// Nothing pops up over the open Notification Feed: the new Notification shows
+// at the top of the list instead. With the switch off, only Refund Request
+// decided pops up, because it carries the money details. A Notification that's
+// already read isn't news.
+function popsUp(
+  notification: Notification,
+  emailAndPopUps: boolean,
+  feedOpen: boolean
+): boolean {
+  if (feedOpen || notification.readAt !== null) return false;
+  return emailAndPopUps || notification.kind === "refund-request-decided";
+}
+
+/** Pops the Notification up through the layout's Toaster and returns its id. */
+function showPopUp(notification: Notification, onView: () => void): string {
+  const id = `notification-${notification.id}`;
+  toast(<Summary parts={notification.summary} className="text-sm" />, {
+    id,
+    description: notification.context,
+    icon: (
+      <NotificationAvatar
+        actor={notification.actor}
+        className="size-6 text-[10px]"
+      />
+    ),
+    // sonner's icon slot is 16px square, too small for the avatar.
+    classNames: { icon: "size-6!" },
+    action: { label: "View", onClick: onView },
+    duration: POP_UP_MS,
+  });
+  return id;
+}
+
+// ─── The bell and the popover ───
+
+const FILTERS = ["all", "unread", "read"] as const;
+type Filter = (typeof FILTERS)[number];
+
+const FILTER_LABELS: Record<Filter, string> = {
+  all: "All",
+  unread: "Unread",
+  read: "Read",
+};
+
+function isShown(notification: Notification, filter: Filter): boolean {
+  if (filter === "unread") return notification.readAt === null;
+  if (filter === "read") return notification.readAt !== null;
+  return true;
+}
+
+export function NotificationBell() {
   const feed = useNotificationFeed();
-  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState<Filter>("all");
+  const list = useRef<HTMLDivElement>(null);
   const { unreadCount } = feed;
-  const close = () => setOpen(false);
+  const close = () => feed.setOpen(false);
+  const shown = feed.notifications.filter((notification) =>
+    isShown(notification, filter)
+  );
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Root open={feed.open} onOpenChange={feed.setOpen}>
       <Popover.Trigger asChild>
         <button
           type="button"
@@ -171,26 +447,70 @@ export function NotificationBell({
           sideOffset={12}
           className="z-50 flex max-h-[min(560px,80vh)] w-[380px] flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-xl"
         >
-          <h2 className="border-b px-4 py-3 text-sm font-semibold">
-            Notifications
-          </h2>
-          {!emailAndPopUps && <EmailAndPopUpsOffLine onNavigate={close} />}
-          <div className="flex-1 overflow-y-auto">
-            {feed.notifications.length === 0 ? (
-              <p className="px-4 py-12 text-center text-sm text-muted-foreground">
-                You're all caught up.
-              </p>
+          <div className="flex items-center gap-2 border-b px-4 py-3">
+            <h2 className="text-sm font-semibold">Notifications</h2>
+            <select
+              aria-label="Show"
+              value={filter}
+              onChange={(event) => {
+                const next = FILTERS.find(
+                  (option) => option === event.target.value
+                );
+                if (next) setFilter(next);
+              }}
+              className="rounded border bg-background px-1.5 py-0.5 text-xs"
+            >
+              {FILTERS.map((option) => (
+                <option key={option} value={option}>
+                  {FILTER_LABELS[option]}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={feed.markAllRead}
+              disabled={unreadCount === 0}
+              className="ml-auto text-xs font-medium text-primary hover:underline disabled:pointer-events-none disabled:opacity-40"
+            >
+              Mark all as read
+            </button>
+          </div>
+          {!feed.emailAndPopUps && <EmailAndPopUpsOffLine onNavigate={close} />}
+          <div ref={list} className="flex-1 overflow-y-auto">
+            {feed.status === "loading" ? (
+              <FeedMessage>Loading…</FeedMessage>
+            ) : feed.status === "failed" ? (
+              <FeedMessage>Couldn't load your Notifications.</FeedMessage>
+            ) : shown.length === 0 && !feed.hasOlder ? (
+              <FeedMessage>You're all caught up.</FeedMessage>
             ) : (
-              feed.notifications.map((notification) => (
-                <NotificationItem
-                  key={notification.id}
-                  notification={notification}
-                  onOpen={() => {
-                    feed.markRead(notification);
-                    setOpen(false);
-                  }}
-                />
-              ))
+              <>
+                {shown.map((notification) => (
+                  <NotificationItem
+                    key={notification.id}
+                    notification={notification}
+                    onClick={(event) => {
+                      // A modifier key opens it in a new tab or window, which
+                      // the browser does. Other clicks view it here.
+                      if (opensElsewhere(event)) {
+                        feed.markRead(notification.id);
+                        return;
+                      }
+                      event.preventDefault();
+                      feed.view(notification);
+                    }}
+                  />
+                ))}
+                {feed.hasOlder && (
+                  // A new marker for every page, so it looks again in case
+                  // the filter leaves it in view.
+                  <LoadOlder
+                    key={feed.notifications.length}
+                    scrollArea={list}
+                    onReach={feed.loadOlder}
+                  />
+                )}
+              </>
             )}
           </div>
           <div className="flex items-center border-t px-4 py-2 text-xs text-muted-foreground">
@@ -206,6 +526,50 @@ export function NotificationBell({
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+function FeedMessage({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="px-4 py-12 text-center text-sm text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+// Sits under the last Notification while older ones remain, and loads the
+// next page as it scrolls into view.
+function LoadOlder({
+  scrollArea,
+  onReach,
+}: {
+  scrollArea: React.RefObject<HTMLDivElement | null>;
+  onReach: () => void;
+}) {
+  const marker = useRef<HTMLParagraphElement>(null);
+  const reach = useEffectEvent(onReach);
+
+  useEffect(() => {
+    const element = marker.current;
+    if (!element) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) reach();
+      },
+      // Start a little before the bottom, so scrolling rarely has to wait.
+      { root: scrollArea.current, rootMargin: "0px 0px 160px 0px" }
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [scrollArea]);
+
+  return (
+    <p
+      ref={marker}
+      className="px-4 py-3 text-center text-xs text-muted-foreground"
+    >
+      Loading…
+    </p>
   );
 }
 
@@ -226,19 +590,29 @@ function EmailAndPopUpsOffLine({ onNavigate }: { onNavigate: () => void }) {
   );
 }
 
+function opensElsewhere(event: React.MouseEvent) {
+  return (
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  );
+}
+
 function NotificationItem({
   notification,
-  onOpen,
+  onClick,
 }: {
   notification: Notification;
-  onOpen: () => void;
+  onClick: (event: React.MouseEvent) => void;
 }) {
   const unread = notification.readAt === null;
 
   return (
     <Link
       to={notification.url}
-      onClick={onOpen}
+      onClick={onClick}
       className="flex w-full gap-3 border-b px-4 py-3 text-left text-sm transition-colors last:border-b-0 hover:bg-accent"
     >
       <span
@@ -251,7 +625,10 @@ function NotificationItem({
       <NotificationAvatar actor={notification.actor} />
       <span className="min-w-0 flex-1">
         {unread && <span className="sr-only">Unread: </span>}
-        <Summary parts={notification.summary} />
+        <Summary
+          parts={notification.summary}
+          className="block text-muted-foreground"
+        />
         <span className="mt-1 block text-xs text-muted-foreground">
           {formatRelativeTime(notification.insertedAt)}
         </span>
@@ -260,11 +637,22 @@ function NotificationItem({
   );
 }
 
-function NotificationAvatar({ actor }: { actor: NotificationActor | null }) {
+function NotificationAvatar({
+  actor,
+  className,
+}: {
+  actor: NotificationActor | null;
+  className?: string;
+}) {
   if (!actor) {
     // Cadence itself.
     return (
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+      <span
+        className={cn(
+          "flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground",
+          className
+        )}
+      >
         C
       </span>
     );
@@ -273,14 +661,20 @@ function NotificationAvatar({ actor }: { actor: NotificationActor | null }) {
     <UserAvatar
       name={actor.name}
       avatarUrl={actor.avatarUrl}
-      className="shrink-0"
+      className={cn("shrink-0", className)}
     />
   );
 }
 
-function Summary({ parts }: { parts: SummaryPart[] }) {
+function Summary({
+  parts,
+  className,
+}: {
+  parts: SummaryPart[];
+  className?: string;
+}) {
   return (
-    <span className="block text-muted-foreground">
+    <span className={className}>
       {parts.map((part, i) =>
         part.strong ? (
           <strong key={i} className="font-semibold text-foreground">
