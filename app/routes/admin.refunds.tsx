@@ -21,7 +21,7 @@ import {
   type RefundRequestForReview,
 } from "~/lib/refunds.server";
 import { RULE_BREAK_LABELS } from "~/lib/refund-rules";
-import { sendEmail } from "~/lib/mailer.server";
+import { notifyRefundRequestDecided } from "~/lib/notifications.server";
 
 const refundFilterSchema = z
   .nativeEnum(RefundStatus)
@@ -127,7 +127,9 @@ export async function action({ request }: Route.ActionArgs) {
     return data({ error: result.error }, { status: result.status });
   }
 
-  await sendEmail(result.email);
+  // In-app and by email. After the decision is saved, so a failed send can't
+  // undo it: a failure is logged, and the decision still succeeds.
+  await notifyRefundRequestDecided(db, refundRequestId);
 
   return {
     success: true,

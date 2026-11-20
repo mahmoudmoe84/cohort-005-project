@@ -9,6 +9,7 @@ import {
   purchases,
   refunds,
   users,
+  RefundStatus,
   UserRole,
 } from "~/db/schema";
 import {
@@ -88,15 +89,21 @@ function getPlatformAdmins(db: Db) {
     .all();
 }
 
+// The buyer is whoever paid: the Student for an Individual Purchase, the Team
+// Admin for a Team Licence.
 function getRefundRequestWithBuyer(db: Db, refundRequestId: number) {
   return db
     .select({
       id: refunds.id,
+      status: refunds.status,
       reason: refunds.reason,
+      decisionNote: refunds.decisionNote,
+      decidedById: refunds.resolvedByUserId,
       amountPaid: purchases.amountPaid,
       courseTitle: courses.title,
       buyerId: users.id,
       buyerName: users.name,
+      buyerEmail: users.email,
       buyerAvatarUrl: users.avatarUrl,
     })
     .from(refunds)
@@ -106,6 +113,10 @@ function getRefundRequestWithBuyer(db: Db, refundRequestId: number) {
     .where(eq(refunds.id, refundRequestId))
     .get();
 }
+
+type RefundRequestWithBuyer = NonNullable<
+  ReturnType<typeof getRefundRequestWithBuyer>
+>;
 
 // Finds nothing until a Student has claimed the Seat. The Team Admin is
 // whoever bought the Team Licence the Seat is on.
@@ -251,6 +262,68 @@ function seatClaimedSummary(
     { text: courseTitle, strong: true },
     { text: `. ${seats.unclaimed} of ${seats.total} ${noun} left.` },
   ];
+}
+
+// The buyer's Refund Requests, on the settings page under the
+// id="refund-requests" anchor.
+const REFUND_REQUESTS_URL = "/settings#refund-requests";
+
+// Signed by Cadence, not the Platform Admin. An approval says what's on its
+// way back: the Refund, which is always the full amount the buyer paid.
+function refundRequestDecidedSummary(
+  refundRequest: RefundRequestWithBuyer
+): SummaryPart[] {
+  const yourRefundRequest: SummaryPart[] = [
+    { text: "Your Refund Request for " },
+    { text: refundRequest.courseTitle, strong: true },
+  ];
+
+  if (refundRequest.status !== RefundStatus.Approved) {
+    return [...yourRefundRequest, { text: " was declined." }];
+  }
+
+  return [
+    ...yourRefundRequest,
+    { text: " was approved. " },
+    { text: formatPrice(refundRequest.amountPaid), strong: true },
+    { text: " is on its way back to you." },
+  ];
+}
+
+// Plain text, like Cadence's other transactional email. The switch can't stop
+// this email, so unlike the Discussion Reply email it has no footer pointing
+// at Notification settings.
+function refundRequestDecidedEmail(
+  refundRequest: RefundRequestWithBuyer
+): NotificationEmail {
+  const { courseTitle, decisionNote } = refundRequest;
+  const approved = refundRequest.status === RefundStatus.Approved;
+
+  const decision = approved
+    ? `Your Refund Request for "${courseTitle}" was approved. ${formatPrice(refundRequest.amountPaid)} is on its way back to you.`
+    : `Your Refund Request for "${courseTitle}" was declined.`;
+  const note = decisionNote ? ["", decisionNote] : [];
+  const whatNext = approved
+    ? []
+    : [
+        "",
+        "You still have everything you bought. If something changes, you can raise a new Refund Request.",
+      ];
+
+  return {
+    subject: `Your Refund Request for ${courseTitle} was ${approved ? "approved" : "declined"}`,
+    body: [
+      `Hi ${refundRequest.buyerName},`,
+      "",
+      decision,
+      ...note,
+      ...whatNext,
+      "",
+      `See your Refund Requests on Cadence: ${absoluteUrl(REFUND_REQUESTS_URL)}`,
+      "",
+      "— The Cadence team",
+    ].join("\n"),
+  };
 }
 
 // ─── One function per kind ───
@@ -438,6 +511,49 @@ export async function notifySeatClaimed(
   } catch (error) {
     console.error(
       `Couldn't send the Seat claimed Notification for Seat ${seatId}`,
+      error
+    );
+  }
+}
+
+/**
+ * Tells the buyer that a Platform Admin approved or declined their Refund
+ * Request, in-app and by email. Call it once the decision is saved. It never
+ * throws: a failure is logged, so the decision still stands. The provider
+ * defaults to the configured one.
+ */
+export async function notifyRefundRequestDecided(
+  db: Db,
+  refundRequestId: number,
+  provider?: NotificationProvider
+): Promise<void> {
+  try {
+    const refundRequest = getRefundRequestWithBuyer(db, refundRequestId);
+    if (!refundRequest || refundRequest.status === RefundStatus.Open) return;
+
+    // Nobody hears about their own action, even a Platform Admin who decides
+    // their own Refund Request.
+    if (refundRequest.decidedById === refundRequest.buyerId) return;
+
+    await (provider ?? configuredNotificationProvider()).send({
+      kind: "refund-request-decided",
+      recipients: [
+        { id: refundRequest.buyerId, email: refundRequest.buyerEmail },
+      ],
+      actor: null,
+      content: {
+        summary: refundRequestDecidedSummary(refundRequest),
+        excerpt: refundRequest.decisionNote,
+        context: refundRequest.courseTitle,
+        url: REFUND_REQUESTS_URL,
+        // Always, whatever the buyer's switch says: it carries the money
+        // details.
+        email: refundRequestDecidedEmail(refundRequest),
+      },
+    });
+  } catch (error) {
+    console.error(
+      `Couldn't send the Refund Request decided Notification for Refund Request ${refundRequestId}`,
       error
     );
   }
