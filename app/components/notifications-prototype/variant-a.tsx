@@ -1,8 +1,10 @@
 // PROTOTYPE, throwaway. Variant A, "Knock's popover": what Cadence gets by
 // dropping in Knock's prebuilt NotificationIconButton + NotificationFeedPopover
-// and theming it. The structure follows Knock's defaults on purpose:
-//   - the badge counts UNSEEN (Knock's default), and opening the popover marks
-//     everything seen, so the badge clears even though items stay unread;
+// and theming it. CHOSEN in issue #17, with one change from Knock's defaults:
+//   - the badge counts UNREAD (badgeCountType="unread"), so it drops only when
+//     a Notification is read, never just because the popover was opened.
+//     (Knock's default counts unseen and clears on open; that was rejected.)
+// Otherwise the structure follows Knock's defaults on purpose:
 //   - a header with an All / Unread / Read filter and "Mark all as read";
 //   - cells: actor avatar, rendered body, time, unread dot; a click marks it
 //     read and follows its action URL;
@@ -63,13 +65,13 @@ export function VariantABell() {
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label={`Notifications, ${prototype.unseenCount} new`}
+          aria-label={`Notifications, ${prototype.unreadCount} unread`}
           className="relative rounded-md p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
         >
           <Bell className="size-4" />
-          {prototype.unseenCount > 0 && (
+          {prototype.unreadCount > 0 && (
             <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold leading-none text-white">
-              {prototype.unseenCount > 9 ? "9+" : prototype.unseenCount}
+              {prototype.unreadCount > 9 ? "9+" : prototype.unreadCount}
             </span>
           )}
         </button>

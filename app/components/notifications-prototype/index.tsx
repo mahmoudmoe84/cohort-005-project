@@ -1,11 +1,15 @@
 // PROTOTYPE, throwaway: answers "What do Notifications look like in Cadence?"
 // (https://github.com/mahmoudmoe84/cohort-005-project/issues/17).
 //
+// Verdict: A, with the badge counting unread (not Knock's default unseen), A's
+// sonner toast for the live pop-up, and a new Discussion Question linking to
+// the Instructor's Questions page. B and C stay here for reference only.
+//
 // Plan: three variants of the bell, the Notification Feed and the live pop-up,
 // mounted in the real app shell (layout.app.tsx) on every page, switched with
 // ?variant=A|B|C (remembered in a cookie so it survives navigation):
 //   A  Knock's popover        bell in the sidebar's top row, Knock's prebuilt
-//                             popover look, badge counts unseen, sonner toast
+//                             popover look, badge counts unread, sonner toast
 //   B  Top bar + side panel   a new header with the bell, full-height panel,
 //                             badge counts unread, pop-up drops from the bell
 //   C  Sidebar item + page    no bell: a "Notifications" sidebar item with a

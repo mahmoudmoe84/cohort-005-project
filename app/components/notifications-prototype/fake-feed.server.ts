@@ -377,7 +377,8 @@ function discussionQuestionDraft(
     ],
     excerpt: row.body,
     context: row.courseTitle,
-    url: lessonUrl(row.courseSlug, row.lessonId),
+    // Decided in issue #17: the Instructor's Questions page, not the lesson.
+    url: "/instructor/questions",
     alwaysDelivered: false,
   };
 }
