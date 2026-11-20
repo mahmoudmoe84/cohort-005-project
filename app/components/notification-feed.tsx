@@ -20,6 +20,7 @@ import {
   type NotificationPage,
 } from "~/lib/notification-feed-client";
 import {
+  emailAndPopUpsOn,
   NOTIFICATION_SETTINGS_URL,
   type FeedCredentials,
   type Notification,
@@ -416,16 +417,15 @@ function useNotificationFeed(): NotificationFeed {
 // ─── Live pop-ups ───
 
 // Nothing pops up over the open Notification Feed: the new Notification shows
-// at the top of the list instead. With the switch off, only Refund Request
-// decided pops up, because it carries the money details. A Notification that's
-// already read isn't news.
+// at the top of the list instead. With the switch off, only a kind that
+// ignores it pops up. A Notification that's already read isn't news.
 function popsUp(
   notification: Notification,
   emailAndPopUps: boolean,
   feedOpen: boolean
 ): boolean {
   if (feedOpen || notification.readAt !== null) return false;
-  return emailAndPopUps || notification.kind === "refund-request-decided";
+  return emailAndPopUpsOn(notification.kind, emailAndPopUps);
 }
 
 /** Pops the Notification up through the layout's Toaster and returns its id. */

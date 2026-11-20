@@ -14,6 +14,7 @@ import {
   UserRole,
 } from "~/db/schema";
 import {
+  emailAndPopUpsOn,
   NOTIFICATION_SETTINGS_URL,
   summaryText,
   type FeedCredentials,
@@ -110,6 +111,7 @@ function getRefundRequestWithBuyer(db: Db, refundRequestId: number) {
       buyerName: users.name,
       buyerEmail: users.email,
       buyerAvatarUrl: users.avatarUrl,
+      buyerEmailAndPopUps: users.emailAndPopUps,
     })
     .from(refunds)
     .innerJoin(purchases, eq(refunds.purchaseId, purchases.id))
@@ -444,7 +446,10 @@ export async function notifyDiscussionReply(
             context: course.title,
             url: discussionLink(course, lesson, discussionReply.id),
             // The author's switch drops the email, and only the email.
-            email: discussionQuestion.authorEmailAndPopUps
+            email: emailAndPopUpsOn(
+              "discussion-reply",
+              discussionQuestion.authorEmailAndPopUps
+            )
               ? discussionReplyEmail(
                   discussionQuestion,
                   discussionReply,
@@ -655,9 +660,13 @@ export async function notifyRefundRequestDecided(
             excerpt: refundRequest.decisionNote,
             context: refundRequest.courseTitle,
             url: REFUND_REQUESTS_URL,
-            // Always, whatever the buyer's switch says: it carries the money
-            // details.
-            email: refundRequestDecidedEmail(refundRequest),
+            // Refund Request decided ignores the switch, so this always goes.
+            email: emailAndPopUpsOn(
+              "refund-request-decided",
+              refundRequest.buyerEmailAndPopUps
+            )
+              ? refundRequestDecidedEmail(refundRequest)
+              : undefined,
           },
         },
         { refundRequestId: refundRequest.id },

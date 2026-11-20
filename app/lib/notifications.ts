@@ -44,6 +44,29 @@ export type Notification = {
 /** The Notification settings page, which holds the switch for email and pop-ups. */
 export const NOTIFICATION_SETTINGS_URL = "/settings/notifications";
 
+// Whether each kind of Notification ignores the person's switch for email and
+// pop-ups. Only Refund Request decided does, because it carries the money
+// details (ADR 0013).
+const IGNORES_SWITCH = {
+  "refund-request-decided": true,
+  "open-refund-request": false,
+  "seat-claimed": false,
+  "discussion-question": false,
+  "discussion-reply": false,
+} satisfies Record<NotificationKind, boolean>;
+
+/**
+ * Whether email and pop-ups are on for a kind of Notification, given the
+ * person's switch. The server asks before it emails, and the browser before it
+ * pops one up.
+ */
+export function emailAndPopUpsOn(
+  kind: NotificationKind,
+  emailAndPopUps: boolean
+): boolean {
+  return emailAndPopUps || IGNORES_SWITCH[kind];
+}
+
 /**
  * What the browser needs to connect to one person's Notification Feed. The
  * Notification Provider's server adapter makes it, and the matching browser
