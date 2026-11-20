@@ -1,8 +1,11 @@
+import { z } from "zod";
+
 // ─── Notifications ───
 // Cadence's own Notification types, shared by the server and the browser.
 // Whichever Notification Provider sits behind Cadence's interfaces (ADR 0013),
 // these are the only shapes the rest of Cadence sees. See GLOSSARY.md for the
-// language.
+// language. The pieces the adapters have in common live here too, because
+// nothing here belongs to one provider.
 
 export const NOTIFICATION_KINDS = [
   "refund-request-decided",
@@ -44,3 +47,43 @@ export const NOTIFICATION_SETTINGS_URL = "/settings/notifications";
  * what's there (ADR 0013).
  */
 export type FeedCredentials = object;
+
+// ─── Shared by the adapters ───
+
+/** How many Notifications the Notification Feed loads at a time. */
+export const NOTIFICATION_FEED_PAGE_SIZE = 20;
+
+/** A Notification's summary, as a browser adapter reads it back. */
+export const summarySchema = z.array(
+  z.object({ text: z.string(), strong: z.boolean().optional() })
+) satisfies z.ZodType<SummaryPart[]>;
+
+/**
+ * Who a Notification Feed client tells about arrivals: the callbacks given to
+ * its onArrival.
+ */
+export function arrivalCallbacks() {
+  const callbacks = new Set<(notification: Notification) => void>();
+
+  return {
+    /** The client's onArrival. Returns a function that stops the callback. */
+    onArrival(callback: (notification: Notification) => void): () => void {
+      callbacks.add(callback);
+      return () => {
+        callbacks.delete(callback);
+      };
+    },
+
+    /** Calls back once for each Notification, in the order given. */
+    arrived(notifications: Notification[]): void {
+      for (const notification of notifications) {
+        for (const callback of callbacks) callback(notification);
+      }
+    },
+
+    /** Stops every callback, as the client's disconnect does. */
+    clear(): void {
+      callbacks.clear();
+    },
+  };
+}

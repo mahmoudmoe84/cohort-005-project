@@ -6,7 +6,10 @@ import Knock, {
 } from "@knocklabs/client";
 import { z } from "zod";
 import {
+  arrivalCallbacks,
+  NOTIFICATION_FEED_PAGE_SIZE,
   NOTIFICATION_KINDS,
+  summarySchema,
   type FeedCredentials,
   type Notification,
 } from "~/lib/notifications";
@@ -48,18 +51,13 @@ const knockNotificationDataSchema = z.object({
   kind: z.enum(NOTIFICATION_KINDS),
   actor_name: z.string().nullish(),
   actor_avatar_url: z.string().nullish(),
-  summary: z.array(
-    z.object({ text: z.string(), strong: z.boolean().optional() })
-  ),
+  summary: summarySchema,
   excerpt: z.string().nullish(),
   context: z.string(),
   url: z.string(),
 });
 
 export type KnockNotificationData = z.infer<typeof knockNotificationDataSchema>;
-
-// The same page size as the fake.
-const PAGE_SIZE = 20;
 
 // Knock's feed client skips a fetch asked for while another is in flight, so
 // fetchPage waits its turn, and tries again if another fetch got in first.
@@ -131,7 +129,7 @@ export function connectKnockNotificationFeed(
   // Rich mode keeps the summary's parts in each item's data. Knock's default,
   // compact, drops arrays and objects from it.
   const feed = knock.feeds.initialize(feedChannelId, {
-    page_size: PAGE_SIZE,
+    page_size: NOTIFICATION_FEED_PAGE_SIZE,
     mode: "rich",
   });
 
@@ -139,7 +137,7 @@ export function connectKnockNotificationFeed(
   const handedOut = new Map<string, FeedItem>();
   // Items that aren't Cadence's, so they're only warned about once.
   const skipped = new Set<string>();
-  const listeners = new Set<(notification: Notification) => void>();
+  const arrivals = arrivalCallbacks();
   let listening = false;
   // The pages being fetched, which unreadCount waits for.
   const fetching = new Set<Promise<unknown>>();
@@ -194,10 +192,8 @@ export function connectKnockNotificationFeed(
   // Knock fetches what arrived after the newest item it holds and lists it
   // newest first. Call back oldest first, as they arrived.
   function onRealtime({ items }: FeedEventPayload) {
-    const arrivals = takeIn(items.filter((item) => !handedOut.has(item.id)));
-    for (const notification of arrivals.reverse()) {
-      for (const listener of listeners) listener(notification);
-    }
+    const arrived = takeIn(items.filter((item) => !handedOut.has(item.id)));
+    arrivals.arrived(arrived.reverse());
   }
   feed.on("items.received.realtime", onRealtime);
 
@@ -293,15 +289,10 @@ export function connectKnockNotificationFeed(
       }
     },
 
-    onArrival(callback) {
-      listeners.add(callback);
-      return () => {
-        listeners.delete(callback);
-      };
-    },
+    onArrival: arrivals.onArrival,
 
     disconnect() {
-      listeners.clear();
+      arrivals.clear();
       feed.dispose();
       // Closes the socket and stops the user token's refresh timer.
       knock.logout();

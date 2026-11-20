@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { connectKnockNotificationFeed } from "~/lib/knock-notification-feed-client";
 import {
+  arrivalCallbacks,
   NOTIFICATION_KINDS,
+  summarySchema,
   type FeedCredentials,
   type Notification,
 } from "~/lib/notifications";
@@ -77,9 +79,7 @@ const notificationSchema = z.object({
   actor: z
     .object({ name: z.string(), avatarUrl: z.string().nullable() })
     .nullable(),
-  summary: z.array(
-    z.object({ text: z.string(), strong: z.boolean().optional() })
-  ),
+  summary: summarySchema,
   excerpt: z.string().nullable(),
   context: z.string(),
   url: z.string(),
@@ -94,7 +94,7 @@ const fakeFeedPageSchema = z.object({
 });
 
 function fakeNotificationFeedClient(userId: number): NotificationFeedClient {
-  const listeners = new Set<(notification: Notification) => void>();
+  const arrivals = arrivalCallbacks();
   const known = new Set<string>();
   let hasLooked = false;
   let connected = true;
@@ -133,11 +133,9 @@ function fakeNotificationFeedClient(userId: number): NotificationFeedClient {
   async function lookForArrivals() {
     try {
       const page = await readPage();
-      const arrivals = takeIn(page.notifications).reverse();
+      const arrived = takeIn(page.notifications).reverse();
       if (!connected) return;
-      for (const notification of arrivals) {
-        for (const listener of listeners) listener(notification);
-      }
+      arrivals.arrived(arrived);
     } catch (error) {
       console.error("Couldn't poll the fake Notification Feed", error);
     }
@@ -167,17 +165,12 @@ function fakeNotificationFeedClient(userId: number): NotificationFeedClient {
       return post({ intent: "mark-all-read" });
     },
 
-    onArrival(callback) {
-      listeners.add(callback);
-      return () => {
-        listeners.delete(callback);
-      };
-    },
+    onArrival: arrivals.onArrival,
 
     disconnect() {
       connected = false;
       clearInterval(timer);
-      listeners.clear();
+      arrivals.clear();
     },
   };
 }

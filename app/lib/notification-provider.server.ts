@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type {
-  FeedCredentials,
-  Notification,
-  NotificationActor,
-  NotificationKind,
-  SummaryPart,
+import {
+  NOTIFICATION_FEED_PAGE_SIZE,
+  type FeedCredentials,
+  type Notification,
+  type NotificationActor,
+  type NotificationKind,
+  type SummaryPart,
 } from "~/lib/notifications";
 import type { FakeFeedCredentials } from "~/lib/notification-feed-client";
 import { outboxTransport, type MailTransport } from "~/lib/mailer.server";
@@ -67,8 +68,6 @@ export interface NotificationProvider {
 // Notification Feed to the fake browser client. Email it's asked for goes to
 // each recipient through `mail`, which is the .outbox/ transport for the fake
 // Cadence uses. Without `mail`, email is only recorded in `sent`.
-
-const FEED_PAGE_SIZE = 20;
 
 // Notification email comes from this address, unlike Cadence's other
 // transactional email. Through Knock it's set on Knock's Postmark channel
@@ -185,7 +184,10 @@ export function createFakeNotificationProvider(
             cursor === undefined
               ? 0
               : all.findIndex((notification) => notification.id === cursor) + 1;
-          const notifications = all.slice(start, start + FEED_PAGE_SIZE);
+          const notifications = all.slice(
+            start,
+            start + NOTIFICATION_FEED_PAGE_SIZE
+          );
           const last = notifications.at(-1);
           const hasMore = start + notifications.length < all.length;
           return {
