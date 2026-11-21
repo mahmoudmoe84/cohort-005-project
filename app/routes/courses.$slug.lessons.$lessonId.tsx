@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import type { Route } from "./+types/courses.$slug.lessons.$lessonId";
 import { getCurrentUserId } from "~/lib/session";
 import { getAccess, requireContentAccess } from "~/lib/access.server";
+import { findLessonInCourse } from "~/lib/lessons.server";
 import { renderComment } from "~/lib/comment-markdown.server";
 import {
   CommentThread,
@@ -908,6 +909,12 @@ export async function action({ params, request }: Route.ActionArgs) {
     intent === "edit-comment" ||
     intent === "delete-comment"
   ) {
+    // The access check and the Notification use the course in the URL. So a
+    // lesson of another course gets a 404 before anything changes.
+    if (!findLessonInCourse(db, lessonId, course.id)) {
+      throw data("Lesson not found in this course", { status: 404 });
+    }
+
     const access = await requireContentAccess(request, course.id);
 
     try {
