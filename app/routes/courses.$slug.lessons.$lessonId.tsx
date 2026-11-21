@@ -655,7 +655,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw data("Lesson not found in this course", { status: 404 });
   }
 
-  const access = await getAccess(request, course.id);
+  const access = await getAccess(db, request, course.id);
   const currentUserId = access.userId;
   const enrolled = access.enrolled;
   let lessonStatus: string | null = null;
@@ -837,7 +837,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     intent === "edit-comment" ||
     intent === "delete-comment"
   ) {
-    const access = await requireContentAccess(request, course.id);
+    const access = await requireContentAccess(db, request, course.id);
 
     try {
       if (intent === "create-comment") {
@@ -911,7 +911,7 @@ export async function action({ params, request }: Route.ActionArgs) {
   // Same content-access bar as the comment intents, plus the Lesson must sit
   // in this course. Loader guards don't protect actions, so check both here.
   if (intent === "toggle-bookmark" || intent === "save-note") {
-    await requireContentAccess(request, course.id);
+    await requireContentAccess(db, request, course.id);
     requireLessonInCourse(lessonId, course.id);
 
     if (intent === "toggle-bookmark") {
