@@ -23,15 +23,7 @@ export function parseFormData<T extends z.ZodType>(
     return { success: true, data: result.data };
   }
 
-  const fieldErrors = result.error.flatten().fieldErrors;
-  const errors: Record<string, string> = {};
-  for (const [key, messages] of Object.entries(fieldErrors)) {
-    if (messages && messages.length > 0) {
-      errors[key] = messages[0];
-    }
-  }
-
-  return { success: false, errors };
+  return { success: false, errors: firstErrorPerField(result.error) };
 }
 
 /**
@@ -66,13 +58,17 @@ export async function parseJsonBody<T extends z.ZodType>(
     return { success: true, data: result.data };
   }
 
-  const fieldErrors = result.error.flatten().fieldErrors;
-  const errors: Record<string, string> = {};
-  for (const [key, messages] of Object.entries(fieldErrors)) {
-    if (messages && messages.length > 0) {
-      errors[key] = messages[0];
-    }
-  }
+  return { success: false, errors: firstErrorPerField(result.error) };
+}
 
-  return { success: false, errors };
+/** The first message for each top-level field, as `flatten().fieldErrors` gave. */
+function firstErrorPerField(error: z.ZodError): Record<string, string> {
+  const errors: Record<string, string> = {};
+  for (const issue of error.issues) {
+    const [field] = issue.path;
+    if (field === undefined) continue;
+    const key = String(field);
+    if (!(key in errors)) errors[key] = issue.message;
+  }
+  return errors;
 }

@@ -10,6 +10,7 @@ import { z } from "zod";
 
 const lockfileSchema = z.object({
   packages: z.record(
+    z.string(),
     z.object({
       name: z.string().optional(),
       version: z.string().optional(),
@@ -19,7 +20,7 @@ const lockfileSchema = z.object({
 });
 
 const packageJsonSchema = z.object({
-  allowScripts: z.record(z.boolean()),
+  allowScripts: z.record(z.string(), z.boolean()),
 });
 
 function readJson(path: string): unknown {
