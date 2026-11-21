@@ -112,3 +112,19 @@ _Avoid_: Alert, Message, Activity
 **Notification Feed**:
 The place inside Cadence where a person sees their Notifications.
 _Avoid_: Inbox, Activity feed
+
+### Bookmarks and Notes
+
+**Bookmark**:
+A Student's flag on a Lesson, so they can find it again. It carries no title.
+_Avoid_: Favourite, star, saved item
+
+**Note**:
+A Student's own plain-text writing about a Lesson, private to the Student who
+wrote it. A Note is not a Discussion Question or Discussion Reply: those are
+addressed to other people, and a Note is addressed to nobody.
+_Avoid_: Annotation, scratchpad, memo, comment
+
+**Saved page**:
+The page where a Student sees their own Bookmarks and Notes.
+_Avoid_: Library, favourites

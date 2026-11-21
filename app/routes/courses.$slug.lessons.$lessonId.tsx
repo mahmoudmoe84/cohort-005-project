@@ -11,6 +11,11 @@ import {
   editComment,
 } from "~/lib/comments.server";
 import { defaultNotifications } from "~/lib/notifications.server";
+import { isBookmarked, toggleBookmark } from "~/lib/bookmarks.server";
+import { getNote, saveNote } from "~/lib/notes.server";
+import { getLessonLocation } from "~/lib/student-lesson.server";
+import { BookmarkToggle } from "~/components/bookmark-toggle";
+import { LessonNote } from "~/components/lesson-note";
 import {
   CommentThread,
   type RenderedComment,
@@ -79,6 +84,11 @@ const createCommentSchema = z.object({
 const editCommentSchema = z.object({
   intent: z.literal("edit-comment"),
   commentId: z.coerce.number().int(),
+  body: z.string(),
+});
+
+// Length is checked by saveNote, so the form can say why it was refused.
+const saveNoteSchema = z.object({
   body: z.string(),
 });
 
@@ -168,6 +178,13 @@ function getCourseWithDetails(id: number) {
 
 function getLessonById(id: number) {
   return db.select().from(lessons).where(eq(lessons.id, id)).get();
+}
+
+// Throws 404 unless the lesson exists and sits in a module of this course.
+function requireLessonInCourse(lessonId: number, courseId: number) {
+  if (getLessonLocation(db, lessonId)?.courseId !== courseId) {
+    throw data("Lesson not found in this course", { status: 404 });
+  }
 }
 
 function getModuleById(id: number) {
@@ -689,6 +706,15 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     ? await renderThread(getLessonThread(lessonId))
     : [];
 
+  // The signed-in person's own Bookmark and Note. The controls only show with
+  // content access, the same bar the action checks, so nobody else pays for
+  // the reads.
+  const studentId = canViewContent ? currentUserId : null;
+  const bookmarked = studentId
+    ? isBookmarked(db, studentId, lessonId)
+    : false;
+  const note = studentId ? (getNote(db, studentId, lessonId) ?? null) : null;
+
   // Render lesson content from Markdown to HTML server-side
   const contentHtml = lesson.content
     ? await renderMarkdown(lesson.content)
@@ -783,6 +809,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     canViewContent,
     canModerate: access.isStaff,
     instructorName: instructor?.name ?? "your instructor",
+    bookmarked,
+    note,
   };
 }
 
@@ -880,6 +908,23 @@ export async function action({ params, request }: Route.ActionArgs) {
     }
   }
 
+  // Same content-access bar as the comment intents, plus the Lesson must sit
+  // in this course. Loader guards don't protect actions, so check both here.
+  if (intent === "toggle-bookmark" || intent === "save-note") {
+    await requireContentAccess(request, course.id);
+    requireLessonInCourse(lessonId, course.id);
+
+    if (intent === "toggle-bookmark") {
+      return { ok: true, bookmarked: toggleBookmark(db, currentUserId, lessonId) };
+    }
+
+    const parsed = parseFormData(formData, saveNoteSchema);
+    if (!parsed.success) {
+      throw data("Invalid note", { status: 400 });
+    }
+    return saveNote(db, currentUserId, lessonId, parsed.data.body, new Date());
+  }
+
   if (intent === "mark-complete") {
     markLessonComplete(currentUserId, lessonId);
     return { success: true };
@@ -966,6 +1011,8 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     canViewContent,
     canModerate,
     instructorName,
+    bookmarked,
+    note,
   } = loaderData;
   const [autoplay, toggleAutoplay] = useAutoplay();
   const fetcher = useFetcher({ key: `mark-complete-${lesson.id}` });
@@ -1074,6 +1121,9 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
                 {formatDuration(lesson.durationMinutes, true, false, false)}
               </div>
             )}
+            {canViewContent && currentUserId && (
+              <BookmarkToggle bookmarked={bookmarked} />
+            )}
             {lesson.githubRepoUrl && (
               <a
                 href={lesson.githubRepoUrl}
@@ -1103,6 +1153,9 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
             />
           )}
 
+          {/* Notes */}
+          {canViewContent && currentUserId && <LessonNote note={note} />}
+
           {/* Lesson Content */}
           {contentHtml && (
             <div
@@ -1118,6 +1171,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
               </CardContent>
             </Card>
           )}
+
 
           {/* Quiz Section */}
           {quiz && enrolled && currentUserId && (

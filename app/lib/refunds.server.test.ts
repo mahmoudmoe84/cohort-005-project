@@ -14,6 +14,8 @@ import {
   listTeamLicences,
   raiseRefundRequest,
 } from "./refunds.server";
+import { isBookmarked, toggleBookmark } from "./bookmarks.server";
+import { getNote, saveNote } from "./notes.server";
 import {
   fakeNotifications,
   type FakeNotifications,
@@ -265,6 +267,22 @@ describe("the refund offer on the course page", () => {
 });
 
 describe("approving a Refund Request", () => {
+  it("keeps the buyer's Bookmarks and Notes", async () => {
+    const purchase = buyForSelf(base.user.id);
+    toggleBookmark(db, base.user.id, lessonIds[0]);
+    saveNote(db, base.user.id, lessonIds[0], "come back to this", NOW);
+    const id = await raise(purchase.id, base.user.id);
+
+    const result = await approveRefundRequest(db, id, platformAdmin.id, null, NOW, notifications);
+
+    expect(result.ok).toBe(true);
+    expect(isEnrolled(base.user.id)).toBe(false);
+    expect(isBookmarked(db, base.user.id, lessonIds[0])).toBe(true);
+    expect(getNote(db, base.user.id, lessonIds[0])?.body).toBe(
+      "come back to this"
+    );
+  });
+
   it("removes the buyer's Enrollment but keeps their progress", async () => {
     const purchase = buyForSelf(base.user.id);
     db.insert(schema.lessonProgress)
