@@ -23,3 +23,11 @@ is a lie the type checker believes.
 Both switch the type checker off at the exact point you are least sure. If a
 value can be missing, narrow it with a check. If you cannot name the type,
 the shape is wrong — fix the shape.
+
+## A new or changed glossary term is the user's decision
+
+Flag every term the diff adds to or rewords in `GLOSSARY.md`, and every
+word it removes from an `_Avoid_:` list, for the user to confirm. A term
+added so that a name already in the code counts as defined is the code
+renaming the domain: report it, and name the existing term the code should
+use instead.
