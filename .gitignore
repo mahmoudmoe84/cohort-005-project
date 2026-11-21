@@ -33,3 +33,5 @@ reports/
 
 # Emails written locally instead of sent
 .outbox/
+
+course_ar
