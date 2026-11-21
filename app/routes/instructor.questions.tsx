@@ -236,8 +236,11 @@ function QuestionCard({ question }: { question: Question }) {
   const stale = waitingDays >= STALE_AFTER_DAYS;
   const submitting = fetcher.state !== "idle";
 
+  // This effect runs when the action's result arrives, not when the fetcher
+  // is idle again. A Discussion Reply answers its Discussion Question. The
+  // reload after the action then removes this card before the fetcher is idle.
   useEffect(() => {
-    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (!fetcher.data) return;
 
     if (fetcher.data.error) {
       toast.error(fetcher.data.error);
@@ -245,7 +248,7 @@ function QuestionCard({ question }: { question: Question }) {
       setBody("");
       toast.success("Reply posted.");
     }
-  }, [fetcher.state, fetcher.data]);
+  }, [fetcher.data]);
 
   return (
     <Card>
