@@ -30,11 +30,15 @@ To use Knock, a person with access to Knock's and Postmark's dashboards does the
 Knock's own email channel only reaches members of the Knock account, so Cadence brings Postmark.
 
 1. In Postmark, verify `support@superhumanai.tech` (or the `superhumanai.tech` domain) as a sender.
+   - A new Postmark account is pending approval until Postmark reviews it. Until then, Postmark refuses every recipient outside the From address's domain (HTTP 422, ErrorCode 412).
+   - Ask Postmark to approve the account before Production.
+   - To check Development before that, send to an address at `superhumanai.tech`.
 2. In Postmark, create a sandbox server for Development. Production uses the existing server, the one whose token is `POSTMARK_SERVER_TOKEN`.
 3. In Knock, add a Postmark email channel and set it up per environment:
    - **API key:** the sandbox server's token in Development, the existing server's token in Production.
    - **From email address:** `support@superhumanai.tech`. **From name:** `Cadence`.
    - **Message stream:** leave it alone. Knock names no stream, so Postmark uses the transactional `outbound` stream.
+   - **Payload overrides**, under Advanced, then Overrides: `{"HtmlBody": null}`. Knock then sends each email as plain text only (see §4).
 4. Leave all four tracking toggles off: Knock's open and link tracking, and Postmark's. Cadence marks a Notification read when its page is opened, not when its email is opened.
 
 ## 3. The in-app feed channel
@@ -64,17 +68,22 @@ Cadence writes all the wording. Each workflow's templates only print fields Cade
 
 **Email step** (only in `refund-request-decided` and `discussion-reply`)
 
-Spec #28 asks for plain-text email. Knock's email step needs an HTML body as well (open question 3), so the HTML part carries the same text and nothing else.
+In the workflow, the email step is the box named **Postmark**. Click it, then click **Edit content**.
 
-- Step condition: `data.email_body` is not empty. Cadence leaves the email fields out when the person's switch is off, so the step is skipped and sends nothing.
-- Layout: **No layout**, so Knock wraps nothing around either part.
-- Subject: `{{ data.email_subject }}`
-- Text body: `{{ data.email_body }}`, with no filter, so the text part is Cadence's plain-text body exactly.
-- HTML body: the same text with nothing added but line breaks. It has no styling, branding or layout. `escape` only keeps characters such as `<` showing as written.
+- **Step condition:** `data.email_body` is not empty. Cadence leaves out the email fields when the person's switch is off, so the step is skipped and sends nothing.
+- **Email layout:** none. The box then shows "Select layout", which is how Knock shows no layout.
+- **Subject:** `{{ data.email_subject }}`
+- **Preview text:** empty.
+- **HTML:** under Content, click **Code editor** and replace everything with the line below. Don't use the visual editor's Markdown block, because it wraps the text in tables.
 
   ```liquid
   {{ data.email_body | escape | newline_to_br }}
   ```
+
+- **Plain text:** click **Plaintext** and turn off **Auto-generate plaintext**. Otherwise Knock makes the text part from the HTML and re-wraps it at about 65 columns. Set the text to `{{ data.email_body }}`, with no filter, so the text part is exactly Cadence's plain-text body.
+- **Save and commit:** click **Save changes**, then **Commit**. Knock's API triggers use only committed workflows.
+
+Spec #28 asks for plain-text email. Knock's email step needs an HTML body, but the channel's payload override (§2) sends `"HtmlBody": null`, so Postmark gets only the text part. The HTML above is a fallback if someone removes that override. It is the same text with only line breaks added, and `escape` keeps characters such as `<` showing as written.
 
 These are the fields each trigger's `data` carries:
 
@@ -108,27 +117,26 @@ Run Cadence against Knock Development, with the seed data (`npm run db:seed`). E
 Then check each of these:
 
 1. All five kinds arrive in the bell live, with a pop-up, while the recipient's page is open.
-2. Discussion Reply and Refund Request decided email reach the Postmark sandbox server, from `support@superhumanai.tech`. Their text part is exactly the body Cadence sent, and their HTML part is that same text with only `<br />` added.
+2. Discussion Reply and Refund Request decided email reach the Postmark sandbox server, from `support@superhumanai.tech`. Each email has only a text part, and that text is exactly the body Cadence sent.
 3. Clicking a Notification, and "Mark all as read", mark them read in Knock's message log. "Mark all as read" must leave another person's Notifications unread: Knock's client scopes it with `user_ids`, which Knock's API reference doesn't list.
 4. Opening the page a Notification links to (from its email, say) marks it read in Knock.
 5. A DevUI user switch shows the new person's Notifications.
 6. Enhanced security is on: Knock refuses `GET /v1/users/{user_id}/feeds/{channel_id}` sent with the public key and no user token.
-7. The three open questions below. Record the results on issue #36.
+The first check passed on 2026-11-21, and its results are on issue #36.
 
-## Open questions
+## Answered questions
 
-None has been checked against a live Knock account. What Knock's docs and source say:
+These were checked against Knock Development on 2026-11-21.
 
-1. **Does an open Notification Feed update live after Cadence marks a Notification read on the server?** Probably not. Knock's socket only sends `new-message`, and its JS client handles nothing else. So the next arrival brings the badge back in line, because its payload carries the counts, but the dots on Notifications already listed stay until the next navigation, when Cadence's bell looks at the newest page again.
-2. **Does the free plan require Knock branding when Knock's UI components aren't used?** Not for Cadence's own UI, as far as the docs go. The pricing page lists "Remove Knock branding" as not on the free plan without saying where the branding appears, and Knock's terms set no duty to show it. A `branding_required` flag in the feed settings drives the "Powered by Knock" footer of Knock's own React feed, which Cadence doesn't use. A Knock FAQ suggests Knock adds "Powered by Knock" to email. To check, read a sent email's HTML and text in the Postmark sandbox, and call `GET /v1/users/{user_id}/feeds/{channel_id}/settings`.
-3. **Can Knock send Notification email as plain text only?** Spec #28 asks for plain text with no HTML. Knock's email step requires an HTML body, and its docs describe no text-only email. Its Postmark channel takes a "Payload overrides" JSON, which might drop the HTML part, but nobody has checked. Until then, each email's HTML part is its text with line breaks. To check, try an override on the Development channel and see whether an email reaches the Postmark sandbox with a text part only.
+1. **Does an open Notification Feed update live after Cadence marks a Notification read on the server?** No. Knock's socket sends nothing when a Notification is read. With the feed open, the badge and the unread dot stayed the same for 20 seconds. The next arrival corrects the badge, because the client then fetches the feed again. The dots correct at the next navigation, when Cadence's bell fetches the newest page again.
+2. **Does the free plan require Knock branding when Knock's UI components aren't used?** Knock adds no branding to the email: neither part contains "Knock" or "Powered by". Cadence's own UI shows none. The feed settings (`GET /v1/users/{user_id}/feeds/{channel_id}/settings`) report `branding_required: true`, but that flag only turns on the footer of Knock's own feed component, which Cadence doesn't use. Only Knock support can say whether its terms ask for more.
+3. **Can Knock send Notification email as plain text only?** Yes, with the Postmark channel's payload override `{"HtmlBody": null}` (§2). Postmark accepts it and stores each email as a single `text/plain` part.
 
 ## Known limits
 
 - Knock keeps its message log for 30 days on the free plan. Opening a page more than 30 days after its Notification can't mark it read on the server. Cadence gives up on it after three tries, so it stays unread in the bell until the person clicks it or marks all as read.
 - Knock runs workflows asynchronously. A page opened in the moment after a send can come before the in-app message exists. Cadence then asks again the next time the page opens, which uses one of the three tries.
 - Opening a page waits for Knock at most a second, however many Notifications it marks read. Marks that take longer finish in the background, and the bell shows them after the next navigation.
-- Until open question 3 is settled, Knock sends an HTML part with each email, while spec #28 asks for plain text only. That part is the text with line breaks, and nothing else.
 - The user token lasts an hour. Before it runs out, the browser asks `/api/notification-feed-credentials` for a fresh one. If Cadence can't sign one, the route answers 503 and the browser logs it. The bell then stops updating once the old token runs out, until the next full page load.
 - Knock's client drops the socket 30 seconds after the tab is hidden. Notifications that arrive meanwhile appear after the next navigation or with the next arrival.
 - Knock's client skips fetching an arrival while it's already fetching. The badge still counts it, but it doesn't pop up, and it joins the list at the next navigation.
