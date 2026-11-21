@@ -282,14 +282,17 @@ function RefundRequestCard({
   const isSubmitting = fetcher.state !== "idle";
   const isOpen = refundRequest.status === RefundStatus.Open;
 
+  // This effect runs when the action's result arrives, not when the fetcher
+  // is idle again. A decided Refund Request is no longer open. The reload
+  // after the action then removes this card before the fetcher is idle.
   useEffect(() => {
-    if (fetcher.state !== "idle" || !fetcher.data) return;
+    if (!fetcher.data) return;
     if ("error" in fetcher.data) {
       toast.error(fetcher.data.error);
     } else {
       toast.success(fetcher.data.message);
     }
-  }, [fetcher.state, fetcher.data]);
+  }, [fetcher.data]);
 
   function decide(intent: "approve" | "decline") {
     fetcher.submit(
