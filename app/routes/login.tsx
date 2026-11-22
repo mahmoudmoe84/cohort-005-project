@@ -2,7 +2,8 @@ import { Form, Link, useActionData, useNavigation, useSearchParams } from "react
 import { redirect, data } from "react-router";
 import { z } from "zod";
 import type { Route } from "./+types/login";
-import { setCurrentUserId, getCurrentUserId } from "~/lib/session";
+import { setCurrentUserId } from "~/lib/session";
+import { getSignedInUserId } from "~/modules/course-access/index.server";
 import { parseFormData } from "~/lib/validation";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -28,7 +29,7 @@ export function meta() {
 }
 
 export async function loader({ request, url }: Route.LoaderArgs) {
-  const currentUserId = await getCurrentUserId(request);
+  const currentUserId = await getSignedInUserId(request);
   if (currentUserId) {
     const redirectTo = url.searchParams.get("redirectTo");
     const destination = redirectTo && redirectTo.startsWith("/") ? redirectTo : "/courses";

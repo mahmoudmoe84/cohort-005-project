@@ -8,7 +8,8 @@ import {
   tolerateNotificationFailure,
 } from "~/lib/notifications.server";
 import { Toaster } from "sonner";
-import { getCurrentUserId, getDevCountry } from "~/lib/session";
+import { getDevCountry } from "~/lib/session";
+import { getSignedInUserId } from "~/modules/course-access/index.server";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { eq, and, or, sql, desc } from "drizzle-orm";
 import { db } from "~/db";
@@ -178,7 +179,7 @@ function getRecentlyProgressedCourses(userId: number, limit: number = 3) {
 
 export async function loader({ request }: Route.LoaderArgs) {
   const users = getAllUsers();
-  const currentUserId = await getCurrentUserId(request);
+  const currentUserId = await getSignedInUserId(request);
   const currentUser = currentUserId ? getUserById(currentUserId) : null;
   const devCountry = await getDevCountry(request);
   const countryTierInfo = getCountryTierInfo(devCountry);
