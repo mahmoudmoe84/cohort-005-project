@@ -1,15 +1,9 @@
 import { Link } from "react-router";
 import type { Route } from "./+types/instructor.$courseId.modules.$moduleId";
 import { requireCourseManager } from "~/modules/course-access/index.server";
-import {
-  users,
-  courses,
-  categories,
-  modules,
-  lessons,
-} from "~/db/schema";
+import { users, modules, lessons } from "~/db/schema";
 import { db } from "~/db";
-import { eq, or } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Card, CardContent } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -33,61 +27,12 @@ const paramsSchema = z.object({
   moduleId: z.coerce.number().int(),
 });
 
-function getCourseWithDetails(id: number) {
-  const course = db
-    .select({
-      id: courses.id,
-      title: courses.title,
-      slug: courses.slug,
-      description: courses.description,
-      salesCopy: courses.salesCopy,
-      instructorId: courses.instructorId,
-      categoryId: courses.categoryId,
-      status: courses.status,
-      coverImageUrl: courses.coverImageUrl,
-      price: courses.price,
-      pppEnabled: courses.pppEnabled,
-      createdAt: courses.createdAt,
-      updatedAt: courses.updatedAt,
-      instructorName: users.name,
-      instructorAvatarUrl: users.avatarUrl,
-      instructorBio: users.bio,
-      categoryName: categories.name,
-    })
-    .from(courses)
-    .innerJoin(users, eq(courses.instructorId, users.id))
-    .innerJoin(categories, eq(courses.categoryId, categories.id))
-    .where(eq(courses.id, id))
+function getInstructor(instructorId: number) {
+  return db
+    .select({ name: users.name, avatarUrl: users.avatarUrl, bio: users.bio })
+    .from(users)
+    .where(eq(users.id, instructorId))
     .get();
-
-  if (!course) return null;
-
-  const courseModules = db
-    .select()
-    .from(modules)
-    .where(eq(modules.courseId, id))
-    .orderBy(modules.position)
-    .all();
-
-  const moduleIds = courseModules.map((m) => m.id);
-
-  const courseLessons =
-    moduleIds.length > 0
-      ? db
-          .select()
-          .from(lessons)
-          .where(or(...moduleIds.map((mid) => eq(lessons.moduleId, mid)))!)
-          .orderBy(lessons.position)
-          .all()
-      : [];
-
-  return {
-    ...course,
-    modules: courseModules.map((mod) => ({
-      ...mod,
-      lessons: courseLessons.filter((l) => l.moduleId === mod.id),
-    })),
-  };
 }
 
 function getModuleWithLessons(id: number) {
@@ -118,12 +63,8 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const { courseId, moduleId } = parsed.data;
 
-  await requireCourseManager(request, courseId);
-
-  const courseWithDetails = getCourseWithDetails(courseId);
-  if (!courseWithDetails) {
-    throw data("Course not found.", { status: 404 });
-  }
+  const { course } = await requireCourseManager(request, courseId);
+  const instructor = getInstructor(course.instructorId);
 
   const moduleWithLessons = getModuleWithLessons(moduleId);
   if (!moduleWithLessons) {
@@ -142,12 +83,12 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   return {
     course: {
-      id: courseWithDetails.id,
-      title: courseWithDetails.title,
-      slug: courseWithDetails.slug,
-      instructorName: courseWithDetails.instructorName,
-      instructorAvatarUrl: courseWithDetails.instructorAvatarUrl,
-      instructorBio: courseWithDetails.instructorBio,
+      id: course.id,
+      title: course.title,
+      slug: course.slug,
+      instructorName: instructor?.name ?? "Unknown",
+      instructorAvatarUrl: instructor?.avatarUrl ?? null,
+      instructorBio: instructor?.bio ?? null,
     },
     module: moduleWithLessons,
     totalLessons,

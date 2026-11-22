@@ -15,7 +15,6 @@ import {
   modules,
   lessons,
   enrollments,
-  purchases,
   teams,
   teamMembers,
   coupons,
@@ -42,6 +41,7 @@ import { resolveCountry } from "~/lib/country.server";
 import { calculatePppPrice, getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { parseFormData, parseParams } from "~/lib/validation";
 import { enrollStudent, isEnrolled } from "~/lib/enrollments.server";
+import { createPurchase } from "~/lib/purchases.server";
 import { defaultNotifications } from "~/lib/notifications.server";
 
 function getCourseBySlug(slug: string) {
@@ -133,19 +133,6 @@ function getEnrollmentCountForCourse(courseId: number) {
   return result?.count ?? 0;
 }
 
-function createPurchase(
-  userId: number,
-  courseId: number,
-  amountPaid: number,
-  country: string | null
-) {
-  return db
-    .insert(purchases)
-    .values({ userId, courseId, amountPaid, country })
-    .returning()
-    .get();
-}
-
 function getTeamForAdmin(userId: number) {
   const membership = db
     .select()
@@ -205,7 +192,7 @@ function createTeamPurchase(
   country: string | null,
   quantity: number
 ) {
-  const purchase = createPurchase(userId, courseId, amountPaid, country);
+  const purchase = createPurchase(db, userId, courseId, amountPaid, country);
   const team = getOrCreateTeamForUser(userId);
   const teamCoupons = generateCoupons(team.id, courseId, purchase.id, quantity);
   return { purchase, team, coupons: teamCoupons };
@@ -320,7 +307,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     if (isEnrolled(db, currentUserId, course.id)) {
       throw redirect(`/courses/${slug}`);
     }
-    createPurchase(currentUserId, course.id, pppPrice, country);
+    createPurchase(db, currentUserId, course.id, pppPrice, country);
     const enrolled = await enrollStudent(
       db,
       currentUserId,

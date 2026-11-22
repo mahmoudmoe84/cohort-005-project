@@ -411,7 +411,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       message =
         typeof error.data === "string"
           ? error.data
-          : "Please select a user from the DevUI panel.";
+          : "Select a user from the DevUI panel.";
     } else if (error.status === 404) {
       title = "User not found";
       message =

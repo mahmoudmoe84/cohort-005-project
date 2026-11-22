@@ -814,6 +814,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     contentHtml,
     lessonStatus,
     enrolled,
+    tracksProgress,
     currentUserId,
     prevLesson,
     nextLesson,
@@ -1016,6 +1017,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     contentHtml,
     lessonStatus,
     enrolled,
+    tracksProgress,
     currentUserId,
     prevLesson,
     nextLesson,
@@ -1161,7 +1163,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
               startPosition={lastWatchPosition}
               durationMinutes={lesson.durationMinutes}
               watchProgress={watchProgress}
-              trackingEnabled={enrolled && canViewContent && !!currentUserId}
+              trackingEnabled={tracksProgress}
               autoplay={autoplay}
               onToggleAutoplay={toggleAutoplay}
             />
@@ -1187,7 +1189,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
           )}
 
           {/* Quiz Section */}
-          {quiz && enrolled && canViewContent && currentUserId && (
+          {quiz && tracksProgress && (
             <QuizSection
               quiz={quiz}
               bestAttempt={bestAttempt}
@@ -1198,7 +1200,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
           )}
 
           {/* Mark Complete / Up Next */}
-          {enrolled && canViewContent && currentUserId && (
+          {tracksProgress && (
             <div className="mb-8">
               {isCompleted ? (
                 <div className="flex items-center gap-3">
@@ -1755,7 +1757,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       message =
         typeof error.data === "string"
           ? error.data
-          : "Please select a user from the DevUI panel.";
+          : "Select a user from the DevUI panel.";
     } else {
       title = `Error ${error.status}`;
       message = typeof error.data === "string" ? error.data : error.statusText;

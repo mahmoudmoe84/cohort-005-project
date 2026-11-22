@@ -5,7 +5,6 @@ import type { Route } from "./+types/instructor.$courseId.lessons.$lessonId.quiz
 import { requireCourseManager } from "~/modules/course-access/index.server";
 import {
   QuestionType,
-  courses,
   modules,
   lessons,
   quizzes,
@@ -109,10 +108,6 @@ interface WizardState {
 
 function generateId() {
   return Math.random().toString(36).slice(2, 10);
-}
-
-function getCourseById(id: number) {
-  return db.select().from(courses).where(eq(courses.id, id)).get();
 }
 
 function getModuleById(id: number) {
@@ -277,12 +272,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw data("Invalid course ID.", { status: 400 });
   }
 
-  await requireCourseManager(request, courseId);
-
-  const course = getCourseById(courseId);
-  if (!course) {
-    throw data("Course not found.", { status: 404 });
-  }
+  const { course } = await requireCourseManager(request, courseId);
 
   const lessonId = parseInt(params.lessonId, 10);
   if (isNaN(lessonId)) {
@@ -313,12 +303,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 export async function action({ params, request }: Route.ActionArgs) {
   const { courseId, lessonId } = parseParams(params, quizParamsSchema);
 
-  await requireCourseManager(request, courseId);
-
-  const course = getCourseById(courseId);
-  if (!course) {
-    throw data("Course not found.", { status: 404 });
-  }
+  const { course } = await requireCourseManager(request, courseId);
 
   const lesson = getLessonById(lessonId);
   if (!lesson) {
@@ -1137,7 +1122,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       message =
         typeof error.data === "string"
           ? error.data
-          : "Please select a user from the DevUI panel.";
+          : "Select a user from the DevUI panel.";
     } else if (error.status === 403) {
       title = "Access denied";
       message =

@@ -70,6 +70,12 @@ export async function requireContentAccess(
   courseId: number
 ): Promise<SignedInCourseAccess> {
   const access = await requireCourse(request, courseId);
+  if (access.blocked?.reason === "ppp-country") {
+    throw data(
+      `Your Purchase plays only in the country where you bought it (${access.blocked.purchaseCountry}).`,
+      { status: 403 }
+    );
+  }
   if (!access.canViewContent) {
     throw data("You must be enrolled in this course.", { status: 403 });
   }

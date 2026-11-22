@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestDb, seedBaseData, type TestDb } from "~/test/setup";
-import * as schema from "~/db/schema";
+import {
+  createTestDb,
+  seedBaseData,
+  seedCourse,
+  seedUser,
+  type TestDb,
+} from "~/test/setup";
 import { UserRole } from "~/db/schema";
 import { setCurrentUserId } from "~/lib/session";
-import { markdown } from "~/lib/text";
+import { enrollStudentInTransaction } from "~/lib/enrollments.server";
+import { createPurchase } from "~/lib/purchases.server";
 
 let testDb: TestDb;
 vi.mock("~/db", () => ({
@@ -44,39 +50,24 @@ let base: ReturnType<typeof seedBaseData>;
 let nextUser = 0;
 function addUser(role: UserRole) {
   nextUser += 1;
-  return testDb
-    .insert(schema.users)
-    .values({ name: `User ${nextUser}`, email: `u${nextUser}@example.com`, role })
-    .returning()
-    .get();
+  return seedUser(testDb, role, nextUser);
 }
 
 /** A paid course with PPP turned on, owned by the base Instructor. */
 function paidPppCourse() {
-  return testDb
-    .insert(schema.courses)
-    .values({
-      title: "Paid Course",
-      slug: "paid-course",
-      description: "A paid course",
-      salesCopy: markdown("Paid"),
-      instructorId: base.instructor.id,
-      categoryId: base.category.id,
-      status: schema.CourseStatus.Published,
-      price: 10000,
-      pppEnabled: true,
-    })
-    .returning()
-    .get();
+  return seedCourse(testDb, {
+    slug: "paid-course",
+    instructorId: base.instructor.id,
+    categoryId: base.category.id,
+    price: 10000,
+    pppEnabled: true,
+  });
 }
 
 /** A Purchase from a country, and the Enrollment it gives. */
 function buy(userId: number, courseId: number, country: string) {
-  testDb
-    .insert(schema.purchases)
-    .values({ userId, courseId, amountPaid: 5000, country })
-    .run();
-  testDb.insert(schema.enrollments).values({ userId, courseId }).run();
+  createPurchase(testDb, userId, courseId, 5000, country);
+  enrollStudentInTransaction(testDb, userId, courseId, new Date());
 }
 
 beforeEach(() => {
@@ -182,6 +173,12 @@ describe("getCourseAccess", () => {
     expect(access.blocked).toEqual({ reason: "not-enrolled" });
   });
 
+  it("gives signed-out, not course-not-found, to a signed-out visitor on an unknown course", async () => {
+    const access = await getCourseAccess(await requestAs(null), 9999);
+    expect(access.course).toBeNull();
+    expect(access.blocked).toEqual({ reason: "signed-out" });
+  });
+
   it("gives course-not-found for an unknown course", async () => {
     const access = await getCourseAccess(await requestAs(base.user.id), 9999);
     expect(access.canViewContent).toBe(false);
@@ -259,7 +256,10 @@ describe("requireContentAccess", () => {
       await thrown(
         requireContentAccess(await requestAs(base.user.id, "BR"), course.id)
       )
-    ).toEqual({ status: 403, text: "You must be enrolled in this course." });
+    ).toEqual({
+      status: 403,
+      text: "Your Purchase plays only in the country where you bought it (IN).",
+    });
   });
 
   it("returns the access for a Student who can read", async () => {

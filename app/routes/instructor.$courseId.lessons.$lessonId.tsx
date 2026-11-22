@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import type { Route } from "./+types/instructor.$courseId.lessons.$lessonId";
 import { requireCourseManager } from "~/modules/course-access/index.server";
 import {
-  courses,
   modules,
   lessons,
   quizzes,
@@ -40,10 +39,6 @@ const updateLessonSchema = z.object({
   durationMinutes: z.string().optional(),
   githubRepoUrl: z.string().trim().optional(),
 });
-
-function getCourseById(id: number) {
-  return db.select().from(courses).where(eq(courses.id, id)).get();
-}
 
 function getModuleById(id: number) {
   return db.select().from(modules).where(eq(modules.id, id)).get();
@@ -98,13 +93,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw data("Invalid course ID.", { status: 400 });
   }
 
-  await requireCourseManager(request, courseId);
-
-  const course = getCourseById(courseId);
-
-  if (!course) {
-    throw data("Course not found.", { status: 404 });
-  }
+  const { course } = await requireCourseManager(request, courseId);
 
   const lessonId = parseInt(params.lessonId, 10);
   if (isNaN(lessonId)) {
@@ -132,12 +121,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     instructorLessonParamsSchema
   );
 
-  await requireCourseManager(request, courseId);
-
-  const course = getCourseById(courseId);
-  if (!course) {
-    throw data("Course not found.", { status: 404 });
-  }
+  const { course } = await requireCourseManager(request, courseId);
 
   const lesson = getLessonById(lessonId);
   if (!lesson) {
@@ -447,7 +431,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       message =
         typeof error.data === "string"
           ? error.data
-          : "Please select a user from the DevUI panel.";
+          : "Select a user from the DevUI panel.";
     } else if (error.status === 403) {
       title = "Access denied";
       message =

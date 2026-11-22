@@ -11,7 +11,6 @@ import {
   modules,
   lessons,
   users,
-  courses,
   enrollments,
   quizzes,
   quizAttempts,
@@ -23,10 +22,6 @@ import { eq, and, or, sql, desc, inArray, max } from "drizzle-orm";
 
 function getUserById(id: number) {
   return db.select().from(users).where(eq(users.id, id)).get();
-}
-
-function getCourseById(id: number) {
-  return db.select().from(courses).where(eq(courses.id, id)).get();
 }
 
 function getCourseEnrolledStudents(courseId: number) {
@@ -190,13 +185,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw data("Invalid course ID.", { status: 400 });
   }
 
-  await requireCourseManager(request, courseId);
-
-  const course = getCourseById(courseId);
-
-  if (!course) {
-    throw data("Course not found.", { status: 404 });
-  }
+  const { course } = await requireCourseManager(request, courseId);
 
   // Get all enrolled students
   const enrolledStudents: {
@@ -494,7 +483,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       message =
         typeof error.data === "string"
           ? error.data
-          : "Please select a user from the DevUI panel.";
+          : "Select a user from the DevUI panel.";
     } else if (error.status === 403) {
       title = "Access denied";
       message =
