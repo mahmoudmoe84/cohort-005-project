@@ -7,7 +7,8 @@ import { CourseStatus } from "~/db/schema";
 import { BookOpen, GraduationCap, Users, ArrowRight, User, Moon, Sun } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
 import { DevUI } from "~/components/dev-ui";
-import { getCurrentUserId, getDevCountry } from "~/lib/session";
+import { getDevCountry } from "~/lib/session";
+import { getSignedInUserId } from "~/modules/course-access/index.server";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { eq, like, and, or, sql } from "drizzle-orm";
 import { db } from "~/db";
@@ -119,7 +120,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   }));
   const categories = getAllCategories();
   const users = getAllUsers();
-  const currentUserId = await getCurrentUserId(request);
+  const currentUserId = await getSignedInUserId(request);
   const currentUser = currentUserId ? getUserById(currentUserId) : null;
   const devCountry = await getDevCountry(request);
   const countryTierInfo = getCountryTierInfo(devCountry);
