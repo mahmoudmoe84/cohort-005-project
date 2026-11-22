@@ -100,6 +100,23 @@ module.exports = {
         path: ["^app/db/", "(^|/)node_modules/(drizzle-orm|better-sqlite3)/"],
       },
     },
+    {
+      name: "routes-no-session",
+      comment:
+        "Routes may not import the session file. Only the Course Access module reads the signed-in user. Only the routes that write the session (switch user, log out, set dev country, login, signup) may import it.",
+      severity: "error",
+      from: {
+        path: "^app/routes/",
+        pathNot: [
+          "^app/routes/api\\.switch-user\\.ts$",
+          "^app/routes/api\\.logout\\.ts$",
+          "^app/routes/api\\.set-dev-country\\.ts$",
+          "^app/routes/login\\.tsx$",
+          "^app/routes/signup\\.tsx$",
+        ],
+      },
+      to: { path: "^app/lib/session\\.ts$" },
+    },
   ],
   options: {
     doNotFollow: { path: "node_modules" },

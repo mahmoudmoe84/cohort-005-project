@@ -29,6 +29,6 @@ Run `npm run lint:boundaries` to check them. The config lives in `.dependency-cr
 
 **No cycles.** No dependency cycles, anywhere under `app/`.
 
-Beyond these four, `.dependency-cruiser.cjs` holds rules for specific modules. **`analytics-page-no-database`:** `app/routes/instructor.analytics.tsx` and `instructor-analytics/config.ts` may not import `~/db`, `drizzle-orm` or `better-sqlite3`. The page gets its data only through `instructor-analytics/index.server.ts`.
+Beyond these four, `.dependency-cruiser.cjs` holds rules for specific modules. **`analytics-page-no-database`:** `app/routes/instructor.analytics.tsx` and `instructor-analytics/config.ts` may not import `~/db`, `drizzle-orm` or `better-sqlite3`. The page gets its data only through `instructor-analytics/index.server.ts`. **`routes-no-session`:** files in `app/routes/` may not import `~/lib/session`. Only `api.switch-user.ts`, `api.logout.ts`, `api.set-dev-country.ts`, `login.tsx` and `signup.tsx` may import it, because they write the session. A route gets the signed-in user only through `course-access/index.server.ts`.
 
 Modules are flat: one level of folders under `app/modules/`. A module's internals may nest as deep as needed, but a module may not contain another module.

@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "~/db";
 import { UserRole, courses, purchases, users } from "~/db/schema";
-import { getCurrentUserId } from "~/lib/session";
+import { getSession } from "~/lib/session";
 import { resolveCountry } from "~/lib/country.server";
 import { checkPppAccess } from "~/lib/ppp";
 import { isEnrolled } from "~/lib/enrollments.server";
@@ -38,13 +38,23 @@ const NO_ACCESS = {
 };
 
 /**
+ * The session reader: the signed-in user's id from the session cookie, or
+ * null. This is the only code in Cadence that reads it.
+ */
+async function readSessionUserId(request: Request): Promise<number | null> {
+  const session = await getSession(request);
+  const userId = session.get("userId");
+  return typeof userId === "number" ? userId : null;
+}
+
+/**
  * The signed-in user, or null. A session that names a user with no row
  * counts as signed out.
  */
 export async function findSignedInUser(
   request: Request
 ): Promise<SignedInUser | null> {
-  const userId = await getCurrentUserId(request);
+  const userId = await readSessionUserId(request);
   if (userId === null) return null;
   const user = db
     .select({ id: users.id, role: users.role })
