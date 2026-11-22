@@ -228,7 +228,7 @@ describe("the Discussion Reply Notification", () => {
 
   it("tells only the question's author, not others in the thread", async () => {
     const question = await post(null);
-    const ben = addLearner("Ben");
+    const ben = addStudent("Ben");
     await postAs(ben.id, question.id, "Same question here.");
     notifications.sent.length = 0;
 
@@ -340,7 +340,7 @@ describe("the Discussion Question Notification", () => {
     const question = await post(null);
     notifications.sent.length = 0;
 
-    await postAs(addLearner("Ben").id, question.id, "Same question here.");
+    await postAs(addStudent("Ben").id, question.id, "Same question here.");
 
     expect(sentOf("discussion-question")).toEqual([]);
   });
@@ -511,7 +511,7 @@ describe("deleting a comment's Notifications", () => {
     await deleteComment(
       db,
       question.id,
-      addLearner("Ben").id,
+      addStudent("Ben").id,
       false,
       NOW,
       notifications
@@ -632,7 +632,7 @@ async function postAs(authorId: number, parentId: number | null, body: string) {
   return result.comment;
 }
 
-function addLearner(name: string) {
+function addStudent(name: string) {
   return db
     .insert(schema.users)
     .values({

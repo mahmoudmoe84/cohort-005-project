@@ -14,6 +14,7 @@ Modules are deep modules: see [app/modules/README.md](./app/modules/README.md) b
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | 401 "Select a user from the DevUI panel"        | No user in the session — switch users and country in the floating panel (`app/components/dev-ui.tsx`). |
 | `tsc` reports every `./+types/*` import missing | Typegen has not run. Use `npm run typecheck`, which runs `react-router typegen` first.                 |
+| `Cannot find module '@knocklabs/…'` (or any declared package) | `node_modules` is behind `package.json`. Run `npm install`; the error is not pre-existing. |
 
 ## Agent skills
 

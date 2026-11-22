@@ -38,7 +38,7 @@ export type InstructorAnalyticsQuery = {
    * read another instructor's funnel by editing the URL.
    */
   courseId: number | null;
-  /** Whether to list every course owner, for the admin's instructor picker. */
+  /** Whether to list every Instructor, for the Platform Admin's instructor picker. */
   includeInstructors: boolean;
 };
 

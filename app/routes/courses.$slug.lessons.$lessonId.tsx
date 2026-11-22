@@ -684,7 +684,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   if (currentUserId) {
     if (tracksProgress) {
-      // Mark lesson as in-progress when viewed
+      // Mark the lesson as in progress when the Student opens it
       markLessonInProgress(currentUserId, lessonId);
       const progress = getLessonProgress(currentUserId, lessonId);
       lessonStatus = progress?.status ?? null;

@@ -207,17 +207,26 @@ let appNotifications: Notifications | undefined;
  * KNOCK_SECRET_API_KEY is set, logging otherwise.
  */
 export async function defaultNotifications(): Promise<Notifications> {
-  if (!appNotifications) appNotifications = await chooseNotifications();
+  if (!appNotifications) {
+    // Vite doesn't put non-VITE_ values from .env on process.env.
+    if (!process.env.KNOCK_SECRET_API_KEY && existsSync(".env")) {
+      process.loadEnvFile(".env");
+    }
+    appNotifications = await chooseNotifications(process.env);
+  }
   return appNotifications;
 }
 
-async function chooseNotifications(): Promise<Notifications> {
-  // Vite doesn't put non-VITE_ values from .env on process.env.
-  if (!process.env.KNOCK_SECRET_API_KEY && existsSync(".env")) {
-    process.loadEnvFile(".env");
-  }
+type Env = Record<string, string | undefined>;
 
-  const secretKey = process.env.KNOCK_SECRET_API_KEY;
+/**
+ * The adapter `env` calls for: Knock when KNOCK_SECRET_API_KEY is set,
+ * logging otherwise. A secret key without the other Knock variables logs why
+ * and falls back to logging rather than throwing. Exported for its own test;
+ * the app goes through `defaultNotifications`.
+ */
+export async function chooseNotifications(env: Env): Promise<Notifications> {
+  const secretKey = env.KNOCK_SECRET_API_KEY;
   if (!secretKey) return loggingNotifications();
 
   return tolerateNotificationFailure(
@@ -228,16 +237,16 @@ async function chooseNotifications(): Promise<Notifications> {
         await import("./notifications.knock.server");
       return knockNotifications({
         secretKey,
-        publicKey: requireEnv("KNOCK_PUBLIC_API_KEY"),
-        signingKey: requireEnv("KNOCK_SIGNING_KEY"),
-        feedChannelId: requireEnv("KNOCK_FEED_CHANNEL_ID"),
+        publicKey: requireEnv(env, "KNOCK_PUBLIC_API_KEY"),
+        signingKey: requireEnv(env, "KNOCK_SIGNING_KEY"),
+        feedChannelId: requireEnv(env, "KNOCK_FEED_CHANNEL_ID"),
       });
     }
   );
 }
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
+function requireEnv(env: Env, name: string): string {
+  const value = env[name];
   if (!value) {
     throw new Error(`${name} must be set when KNOCK_SECRET_API_KEY is set`);
   }

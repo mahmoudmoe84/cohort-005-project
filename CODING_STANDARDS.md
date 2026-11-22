@@ -57,3 +57,11 @@ module, add that route to the same rule in `.dependency-cruiser.cjs`.
 Test setup calls the module's own functions. When the function you need does
 not exist, add it to the module rather than inserting rows directly, so a
 change to how the module stores its data leaves its tests alone.
+
+## A new or changed glossary term is the user's decision
+
+Flag every term the diff adds to or rewords in `GLOSSARY.md`, and every
+word it removes from an `_Avoid_:` list, for the user to confirm. A term
+added so that a name already in the code counts as defined is the code
+renaming the domain: report it, and name the existing term the code should
+use instead.
