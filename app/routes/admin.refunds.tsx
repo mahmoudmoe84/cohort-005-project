@@ -3,11 +3,10 @@ import { useFetcher, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { z } from "zod";
 import type { Route } from "./+types/admin.refunds";
-import { getCurrentUserId } from "~/lib/session";
+import { requirePlatformAdmin } from "~/modules/course-access/index.server";
 import { parseFormData } from "~/lib/validation";
-import { RefundStatus, UserRole, users } from "~/db/schema";
+import { RefundStatus } from "~/db/schema";
 import { db } from "~/db";
-import { eq } from "drizzle-orm";
 import { Card, CardContent } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
@@ -49,31 +48,6 @@ const adminRefundActionSchema = z.discriminatedUnion("intent", [
   }),
 ]);
 
-function getUserById(id: number) {
-  return db.select().from(users).where(eq(users.id, id)).get();
-}
-
-/** Only a Platform Admin decides Refund Requests. */
-async function requirePlatformAdmin(request: Request) {
-  const currentUserId = await getCurrentUserId(request);
-
-  if (!currentUserId) {
-    throw data("Select a user from the DevUI panel to review refunds.", {
-      status: 401,
-    });
-  }
-
-  const currentUser = getUserById(currentUserId);
-
-  if (!currentUser || currentUser.role !== UserRole.Admin) {
-    throw data("Only Platform Admins can review refund requests.", {
-      status: 403,
-    });
-  }
-
-  return currentUser;
-}
-
 export function meta() {
   return [
     { title: "Refund Requests — Cadence" },
@@ -93,7 +67,7 @@ export async function loader({ request, url }: Route.LoaderArgs) {
 }
 
 export async function action({ request }: Route.ActionArgs) {
-  const platformAdmin = await requirePlatformAdmin(request);
+  const platformAdminId = await requirePlatformAdmin(request);
 
   const formData = await request.formData();
   const parsed = parseFormData(formData, adminRefundActionSchema);
@@ -112,7 +86,7 @@ export async function action({ request }: Route.ActionArgs) {
       ? await approveRefundRequest(
           db,
           refundRequestId,
-          platformAdmin.id,
+          platformAdminId,
           note || null,
           new Date(),
           await defaultNotifications()
@@ -120,7 +94,7 @@ export async function action({ request }: Route.ActionArgs) {
       : await declineRefundRequest(
           db,
           refundRequestId,
-          platformAdmin.id,
+          platformAdminId,
           note,
           new Date(),
           await defaultNotifications()
@@ -390,7 +364,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       message =
         typeof error.data === "string"
           ? error.data
-          : "Please select a user from the DevUI panel.";
+          : "Select a user from the DevUI panel.";
     } else if (error.status === 403) {
       title = "Access denied";
       message =

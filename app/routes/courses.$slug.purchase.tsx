@@ -3,7 +3,10 @@ import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
 import type { Route } from "./+types/courses.$slug.purchase";
-import { getCurrentUserId } from "~/lib/session";
+import {
+  getSignedInUserId,
+  requireSignedIn,
+} from "~/modules/course-access/index.server";
 import { db } from "~/db";
 import {
   courses,
@@ -12,7 +15,6 @@ import {
   modules,
   lessons,
   enrollments,
-  purchases,
   teams,
   teamMembers,
   coupons,
@@ -39,6 +41,7 @@ import { resolveCountry } from "~/lib/country.server";
 import { calculatePppPrice, getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { parseFormData, parseParams } from "~/lib/validation";
 import { enrollStudent, isEnrolled } from "~/lib/enrollments.server";
+import { createPurchase } from "~/lib/purchases.server";
 import { defaultNotifications } from "~/lib/notifications.server";
 
 function getCourseBySlug(slug: string) {
@@ -130,19 +133,6 @@ function getEnrollmentCountForCourse(courseId: number) {
   return result?.count ?? 0;
 }
 
-function createPurchase(
-  userId: number,
-  courseId: number,
-  amountPaid: number,
-  country: string | null
-) {
-  return db
-    .insert(purchases)
-    .values({ userId, courseId, amountPaid, country })
-    .returning()
-    .get();
-}
-
 function getTeamForAdmin(userId: number) {
   const membership = db
     .select()
@@ -202,7 +192,7 @@ function createTeamPurchase(
   country: string | null,
   quantity: number
 ) {
-  const purchase = createPurchase(userId, courseId, amountPaid, country);
+  const purchase = createPurchase(db, userId, courseId, amountPaid, country);
   const team = getOrCreateTeamForUser(userId);
   const teamCoupons = generateCoupons(team.id, courseId, purchase.id, quantity);
   return { purchase, team, coupons: teamCoupons };
@@ -240,8 +230,8 @@ export async function loader({ params, request, url }: Route.LoaderArgs) {
     throw data("Course not found.", { status: 404 });
   }
 
-  const currentUserId = await getCurrentUserId(request);
-  if (!currentUserId) {
+  const currentUserId = await getSignedInUserId(request);
+  if (currentUserId === null) {
     throw redirect(
       `/signup?redirectTo=${encodeURIComponent(`/courses/${slug}/purchase`)}`
     );
@@ -299,10 +289,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     throw data("Course not found.", { status: 404 });
   }
 
-  const currentUserId = await getCurrentUserId(request);
-  if (!currentUserId) {
-    throw data("You must be logged in.", { status: 401 });
-  }
+  const currentUserId = await requireSignedIn(request);
 
   const formData = await request.formData();
   const parsed = parseFormData(formData, purchaseActionSchema);
@@ -320,7 +307,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     if (isEnrolled(db, currentUserId, course.id)) {
       throw redirect(`/courses/${slug}`);
     }
-    createPurchase(currentUserId, course.id, pppPrice, country);
+    createPurchase(db, currentUserId, course.id, pppPrice, country);
     const enrolled = await enrollStudent(
       db,
       currentUserId,

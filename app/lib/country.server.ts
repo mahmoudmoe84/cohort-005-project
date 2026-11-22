@@ -1,4 +1,4 @@
-import { getSession } from "~/lib/session";
+import { getDevCountry } from "~/lib/dev-country.server";
 
 // ─── Country Resolution ───
 // Layered approach: (1) dev session override, (2) CF-IPCountry header.
@@ -7,9 +7,8 @@ import { getSession } from "~/lib/session";
 
 export async function resolveCountry(request: Request): Promise<string | null> {
   // 1. Dev session override
-  const session = await getSession(request);
-  const devCountry = session.get("devCountry");
-  if (typeof devCountry === "string" && devCountry.length === 2) {
+  const devCountry = await getDevCountry(request);
+  if (devCountry && devCountry.length === 2) {
     return devCountry.toUpperCase();
   }
 

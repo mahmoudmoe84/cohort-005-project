@@ -78,3 +78,36 @@ export function seedBaseData(testDb: TestDb) {
 
   return { user, instructor, category, course };
 }
+
+/** Seeds one more user with a role, for tests that need more than the base. */
+export function seedUser(testDb: TestDb, role: schema.UserRole, n: number) {
+  return testDb
+    .insert(schema.users)
+    .values({ name: `User ${n}`, email: `user${n}@example.com`, role })
+    .returning()
+    .get();
+}
+
+/** Seeds one more published course, with a price and PPP when given. */
+export function seedCourse(
+  testDb: TestDb,
+  values: {
+    slug: string;
+    instructorId: number;
+    categoryId: number;
+    price?: number;
+    pppEnabled?: boolean;
+  }
+) {
+  return testDb
+    .insert(schema.courses)
+    .values({
+      title: values.slug,
+      description: `The ${values.slug} course`,
+      salesCopy: markdown(`## ${values.slug}`),
+      status: schema.CourseStatus.Published,
+      ...values,
+    })
+    .returning()
+    .get();
+}

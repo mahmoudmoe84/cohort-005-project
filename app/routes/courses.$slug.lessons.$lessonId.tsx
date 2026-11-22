@@ -2,8 +2,10 @@ import { useState, useEffect, useCallback } from "react";
 import { Link, useFetcher, useNavigate } from "react-router";
 import { toast } from "sonner";
 import type { Route } from "./+types/courses.$slug.lessons.$lessonId";
-import { getCurrentUserId } from "~/lib/session";
-import { getAccess, requireContentAccess } from "~/lib/access.server";
+import {
+  getCourseAccess,
+  requireContentAccess,
+} from "~/modules/course-access/index.server";
 import { renderComment } from "~/lib/comment-markdown.server";
 import { markdown, type Markdown } from "~/lib/text";
 import {
@@ -66,7 +68,7 @@ import { renderMarkdown } from "~/lib/markdown.server";
 import { YouTubePlayer } from "~/components/youtube-player";
 import { data, isRouteErrorResponse } from "react-router";
 import { z } from "zod";
-import { COUNTRIES } from "~/lib/ppp";
+import { countryName } from "~/lib/ppp";
 import { parseFormData, parseParams } from "~/lib/validation";
 
 const lessonParamsSchema = z.object({
@@ -669,17 +671,20 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw data("Lesson not found in this course", { status: 404 });
   }
 
-  const access = await getAccess(request, course.id);
+  const access = await getCourseAccess(request, course.id);
   const currentUserId = access.userId;
-  const enrolled = access.enrolled;
+  const enrolled = access.isEnrolled;
+  // Progress is recorded only for a Student with an Enrollment who can view
+  // the content. A PPP-blocked visit does not count as progress.
+  const tracksProgress = enrolled && access.canViewContent;
   let lessonStatus: string | null = null;
   let lastWatchPosition = 0;
   let watchProgress = 0;
   let lessonProgressMap: Record<number, string> = {};
 
   if (currentUserId) {
-    if (enrolled) {
-      // Mark lesson as in-progress when viewed
+    if (tracksProgress) {
+      // Mark the lesson as in progress when the Student opens it
       markLessonInProgress(currentUserId, lessonId);
       const progress = getLessonProgress(currentUserId, lessonId);
       lessonStatus = progress?.status ?? null;
@@ -708,10 +713,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     }
   }
 
-  // PPP Access Guard — resolved by getAccess, which treats a blocked user as
-  // having no access to the course's content at all.
-  const { pppBlocked, pppBlockedCountry, pppPurchaseCountry, canViewContent } =
-    access;
+  // A PPP block counts as no access to the course's content at all. The page
+  // reads blocked.reason to show the PPP notice.
+  const { blocked, canViewContent } = access;
 
   // Comments are confidential to the course: only people who can read the
   // lesson can read the discussion on it.
@@ -810,6 +814,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     contentHtml,
     lessonStatus,
     enrolled,
+    tracksProgress,
     currentUserId,
     prevLesson,
     nextLesson,
@@ -818,12 +823,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     lastWatchPosition,
     watchProgress,
     lessonProgressMap,
-    pppBlocked,
-    pppBlockedCountry,
-    pppPurchaseCountry,
+    blocked,
     comments,
     canViewContent,
-    canModerate: access.isStaff,
+    canModerate: access.isCourseManager,
     instructorName: instructor?.name ?? "your instructor",
     bookmarked,
     note: note ? { body: note.body, updatedAt: note.updatedAt } : null,
@@ -838,23 +841,19 @@ export async function action({ params, request }: Route.ActionArgs) {
     throw data("Course not found", { status: 404 });
   }
 
-  const currentUserId = await getCurrentUserId(request);
-  if (!currentUserId) {
-    throw data("You must be logged in", { status: 401 });
-  }
+  // Check content access once, before any intent runs, so that every intent
+  // (and each new one) is protected. Loader guards don't protect actions.
+  const access = await requireContentAccess(request, course.id);
+  const currentUserId = access.userId;
 
   const formData = await request.formData();
   const intent = formData.get("intent");
 
-  // Comment intents re-check access here rather than relying on the loader —
-  // loader guards don't protect actions.
   if (
     intent === "create-comment" ||
     intent === "edit-comment" ||
     intent === "delete-comment"
   ) {
-    const access = await requireContentAccess(request, course.id);
-
     try {
       if (intent === "create-comment") {
         const parsed = parseFormData(formData, createCommentSchema);
@@ -908,7 +907,7 @@ export async function action({ params, request }: Route.ActionArgs) {
         db,
         parsed.data.commentId,
         currentUserId,
-        access.isStaff,
+        access.isCourseManager,
         new Date(),
         await defaultNotifications()
       );
@@ -924,10 +923,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     }
   }
 
-  // Bookmark and Note intents re-check access here, like the comment intents
-  // above — loader guards don't protect actions.
   if (intent === "toggle-bookmark" || intent === "save-note") {
-    await requireContentAccess(request, course.id);
     requireLessonInCourse(lessonId, course.id);
 
     if (intent === "toggle-bookmark") {
@@ -1021,6 +1017,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     contentHtml,
     lessonStatus,
     enrolled,
+    tracksProgress,
     currentUserId,
     prevLesson,
     nextLesson,
@@ -1029,9 +1026,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     lastWatchPosition,
     watchProgress,
     lessonProgressMap,
-    pppBlocked,
-    pppBlockedCountry,
-    pppPurchaseCountry,
+    blocked,
     comments,
     canViewContent,
     canModerate,
@@ -1063,15 +1058,9 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
   const quizResult = quizFetcher.data?.quizResult ?? null;
   const isSubmittingQuiz = quizFetcher.state !== "idle";
 
-  if (pppBlocked) {
-    const purchaseCountryName = pppPurchaseCountry
-      ? (COUNTRIES.find((c) => c.code === pppPurchaseCountry)?.name ??
-        pppPurchaseCountry)
-      : "your original country";
-    const currentCountryName = pppBlockedCountry
-      ? (COUNTRIES.find((c) => c.code === pppBlockedCountry)?.name ??
-        pppBlockedCountry)
-      : "a different country";
+  if (blocked?.reason === "ppp-country") {
+    const purchaseCountryName = countryName(blocked.purchaseCountry);
+    const currentCountryName = countryName(blocked.currentCountry);
 
     return (
       <div className="flex min-h-[60vh] items-center justify-center p-6">
@@ -1174,7 +1163,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
               startPosition={lastWatchPosition}
               durationMinutes={lesson.durationMinutes}
               watchProgress={watchProgress}
-              trackingEnabled={enrolled && !!currentUserId}
+              trackingEnabled={tracksProgress}
               autoplay={autoplay}
               onToggleAutoplay={toggleAutoplay}
             />
@@ -1200,7 +1189,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
           )}
 
           {/* Quiz Section */}
-          {quiz && enrolled && currentUserId && (
+          {quiz && tracksProgress && (
             <QuizSection
               quiz={quiz}
               bestAttempt={bestAttempt}
@@ -1211,7 +1200,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
           )}
 
           {/* Mark Complete / Up Next */}
-          {enrolled && currentUserId && (
+          {tracksProgress && (
             <div className="mb-8">
               {isCompleted ? (
                 <div className="flex items-center gap-3">
@@ -1768,7 +1757,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       message =
         typeof error.data === "string"
           ? error.data
-          : "Please select a user from the DevUI panel.";
+          : "Select a user from the DevUI panel.";
     } else {
       title = `Error ${error.status}`;
       message = typeof error.data === "string" ? error.data : error.statusText;

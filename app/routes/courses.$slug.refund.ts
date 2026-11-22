@@ -1,7 +1,7 @@
 import { data, redirect } from "react-router";
 import { z } from "zod";
 import type { Route } from "./+types/courses.$slug.refund";
-import { getCurrentUserId } from "~/lib/session";
+import { requireSignedIn } from "~/modules/course-access/index.server";
 import { db } from "~/db";
 import { courses, purchases } from "~/db/schema";
 import { eq } from "drizzle-orm";
@@ -31,11 +31,7 @@ function getCourseBySlug(slug: string) {
 }
 
 export async function action({ params, request }: Route.ActionArgs) {
-  const currentUserId = await getCurrentUserId(request);
-
-  if (!currentUserId) {
-    throw data("You must be logged in to request a refund.", { status: 401 });
-  }
+  const currentUserId = await requireSignedIn(request);
 
   const { slug } = parseParams(params, refundParamsSchema);
   const course = getCourseBySlug(slug);
