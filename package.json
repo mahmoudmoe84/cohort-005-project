@@ -21,7 +21,8 @@
     "knock:push-workflows": "tsx scripts/push-knock-workflows.ts",
     "seed-wayfinder-issues": "bash scripts/seed-wayfinder-issues.sh",
     "db:migrate": "drizzle-kit migrate",
-    "loc": "git ls-files | grep -vE '(lock|.db|_snapshot.json)' | xargs wc -l"
+    "loc": "git ls-files | grep -vE '(lock|.db|_snapshot.json)' | xargs wc -l",
+    "lint:boundaries": "depcruise app"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
@@ -60,6 +61,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/youtube": "^0.1.2",
     "ai-hero-cli": "0.13.0",
+    "dependency-cruiser": "^17.4.3",
     "drizzle-kit": "^0.31.4",
     "prettier": "^3.8.1",
     "shadcn": "^3.8.4",

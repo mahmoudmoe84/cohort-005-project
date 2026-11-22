@@ -4,6 +4,9 @@ Do these checks in this order before you report a change to `app/` as complete:
 
 1. `npm run typecheck`
 2. `npm run test`
+3. `npm run lint:boundaries`
+
+Modules are deep modules: see [app/modules/README.md](./app/modules/README.md) before adding or importing one.
 
 ## When something breaks
 
@@ -17,3 +20,7 @@ Do these checks in this order before you report a change to `app/` as complete:
 ### Issue tracker
 
 Issues and PRDs live as GitHub issues on your own copy of this repo (the `origin` remote), never on `ai-hero-dev/cohort-005-project`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+
+## Language Simplicity 
+write using ASD-STE100
