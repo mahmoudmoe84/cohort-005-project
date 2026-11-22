@@ -22,6 +22,10 @@ _Avoid_: Admin (on its own), the team, Staff
 A Student who buys and manages a Team Licence. A Team Admin has no say over Refund Requests.
 _Avoid_: Admin (on its own)
 
+**Course Manager**:
+The Instructor who owns a course, or any Platform Admin. A Course Manager speaks for the course.
+_Avoid_: Staff, Course Owner (a Platform Admin does not own the course), Moderator
+
 ### Enrollment
 
 **Enrollment**:
