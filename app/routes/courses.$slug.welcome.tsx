@@ -7,10 +7,9 @@ import {
   users,
   modules,
   lessons,
-  enrollments,
 } from "~/db/schema";
-import { eq, and, or } from "drizzle-orm";
-import { getCurrentUserId } from "~/lib/session";
+import { eq, or } from "drizzle-orm";
+import { getCourseAccess } from "~/modules/course-access/index.server";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
 import { PartyPopper, MessageCircle, PlayCircle } from "lucide-react";
@@ -77,17 +76,6 @@ function getCourseWithDetails(id: number) {
   };
 }
 
-function isUserEnrolled(userId: number, courseId: number) {
-  const enrollment = db
-    .select()
-    .from(enrollments)
-    .where(
-      and(eq(enrollments.userId, userId), eq(enrollments.courseId, courseId))
-    )
-    .get();
-  return !!enrollment;
-}
-
 export function meta({ loaderData }: Route.MetaArgs) {
   const title = loaderData?.course?.title ?? "Welcome";
   return [
@@ -104,12 +92,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw data("Course not found.", { status: 404 });
   }
 
-  const currentUserId = await getCurrentUserId(request);
-  if (!currentUserId) {
-    throw redirect(`/courses/${slug}`);
-  }
-
-  if (!isUserEnrolled(currentUserId, course.id)) {
+  // No Enrollment, a PPP block, or signed out: back to the course page.
+  const access = await getCourseAccess(request, course.id);
+  if (!access.canViewContent) {
     throw redirect(`/courses/${slug}`);
   }
 

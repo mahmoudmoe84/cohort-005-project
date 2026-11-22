@@ -3,7 +3,11 @@ import { Link, useFetcher, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { z } from "zod";
 import type { Route } from "./+types/courses.$slug";
-import { getCurrentUserId } from "~/lib/session";
+import {
+  getCourseAccess,
+  requireSignedIn,
+} from "~/modules/course-access/index.server";
+import { isEnrolled } from "~/lib/enrollments.server";
 import { db } from "~/db";
 import {
   courses,
@@ -11,7 +15,6 @@ import {
   users,
   modules,
   lessons,
-  enrollments,
   lessonProgress,
   courseRatings,
   LessonProgressStatus,
@@ -130,17 +133,6 @@ function getLessonCountForCourse(courseId: number) {
     .get();
 
   return count?.count ?? 0;
-}
-
-function isUserEnrolled(userId: number, courseId: number) {
-  const enrollment = db
-    .select()
-    .from(enrollments)
-    .where(
-      and(eq(enrollments.userId, userId), eq(enrollments.courseId, courseId))
-    )
-    .get();
-  return !!enrollment;
 }
 
 function getCourseLessonIds(courseId: number): number[] {
@@ -388,33 +380,29 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   }
 
   const lessonCount = getLessonCountForCourse(course.id);
-  const currentUserId = await getCurrentUserId(request);
-
-  let enrolled = false;
+  const access = await getCourseAccess(request, course.id);
+  const currentUserId = access.userId;
+  const enrolled = access.isEnrolled;
   let progress = 0;
   let lessonProgressMap: Record<number, string> = {};
   let nextLessonId: number | null = null;
   let refundOffer: RefundOffer | null = null;
 
-  if (currentUserId) {
-    enrolled = isUserEnrolled(currentUserId, course.id);
+  if (currentUserId !== null && enrolled) {
+    refundOffer = getRefundOffer(db, currentUserId, course.id, new Date());
 
-    if (enrolled) {
-      refundOffer = getRefundOffer(db, currentUserId, course.id, new Date());
+    progress = calculateProgress(currentUserId, course.id, false);
 
-      progress = calculateProgress(currentUserId, course.id, false);
-
-      const progressRecords = getLessonProgressForCourse(
-        currentUserId,
-        course.id
-      );
-      for (const record of progressRecords) {
-        lessonProgressMap[record.lessonId] = record.status;
-      }
-
-      const nextLesson = getNextIncompleteLesson(currentUserId, course.id);
-      nextLessonId = nextLesson?.id ?? null;
+    const progressRecords = getLessonProgressForCourse(
+      currentUserId,
+      course.id
+    );
+    for (const record of progressRecords) {
+      lessonProgressMap[record.lessonId] = record.status;
     }
+
+    const nextLesson = getNextIncompleteLesson(currentUserId, course.id);
+    nextLessonId = nextLesson?.id ?? null;
   }
 
   // Render sales copy from Markdown to HTML server-side
@@ -451,18 +439,16 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 // Enrollment is handled via the purchase confirmation page — this action only
 // records star ratings.
 export async function action({ params, request }: Route.ActionArgs) {
-  const currentUserId = await getCurrentUserId(request);
-
-  if (!currentUserId) {
-    throw data("You must be logged in to rate a course.", { status: 401 });
-  }
+  const currentUserId = await requireSignedIn(request);
 
   const course = getCourseBySlug(params.slug);
   if (!course) {
     throw data("Course not found", { status: 404 });
   }
 
-  if (!isUserEnrolled(currentUserId, course.id)) {
+  // Rating needs an Enrollment only: a PPP block does not apply, and a Course
+  // Manager with no Enrollment can't rate.
+  if (!isEnrolled(db, currentUserId, course.id)) {
     throw data("You must be enrolled in this course to rate it.", {
       status: 403,
     });

@@ -1,11 +1,10 @@
 import { Link } from "react-router";
 import type { Route } from "./+types/courses.$slug.$moduleId";
-import { getCurrentUserId } from "~/lib/session";
+import { getCourseAccess } from "~/modules/course-access/index.server";
 import { db } from "~/db";
 import {
   categories,
   courses,
-  enrollments,
   lessonProgress,
   lessons,
   modules,
@@ -111,18 +110,6 @@ function getModuleWithLessons(id: number) {
   return { ...mod, lessons: moduleLessons };
 }
 
-function isUserEnrolled(userId: number, courseId: number) {
-  const existing = db
-    .select()
-    .from(enrollments)
-    .where(
-      and(eq(enrollments.userId, userId), eq(enrollments.courseId, courseId))
-    )
-    .get();
-
-  return !!existing;
-}
-
 function getLessonProgressForCourse(userId: number, courseId: number) {
   const courseModules = db
     .select({ id: modules.id })
@@ -186,22 +173,18 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw data("Module not found in this course", { status: 404 });
   }
 
-  const currentUserId = await getCurrentUserId(request);
+  // A visitor who can't read the course's content sees the lesson list with
+  // no links: no Enrollment, a PPP block, or signed out.
+  const access = await getCourseAccess(request, course.id);
+  const lessonProgressMap: Record<number, string> = {};
 
-  let enrolled = false;
-  let lessonProgressMap: Record<number, string> = {};
-
-  if (currentUserId) {
-    enrolled = isUserEnrolled(currentUserId, course.id);
-
-    if (enrolled) {
-      const progressRecords = getLessonProgressForCourse(
-        currentUserId,
-        course.id
-      );
-      for (const record of progressRecords) {
-        lessonProgressMap[record.lessonId] = record.status;
-      }
+  if (access.canViewContent && access.userId !== null) {
+    const progressRecords = getLessonProgressForCourse(
+      access.userId,
+      course.id
+    );
+    for (const record of progressRecords) {
+      lessonProgressMap[record.lessonId] = record.status;
     }
   }
 
@@ -228,7 +211,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       instructorBio: courseWithDetails.instructorBio,
     },
     module: moduleWithLessons,
-    enrolled,
+    canViewContent: access.canViewContent,
+    // Progress is recorded only with an Enrollment.
+    showProgress: access.canViewContent && access.isEnrolled,
     lessonProgressMap,
     moduleProgress,
     completedLessons,
@@ -269,7 +254,8 @@ export default function ModuleDetail({ loaderData }: Route.ComponentProps) {
   const {
     course,
     module: mod,
-    enrolled,
+    canViewContent,
+    showProgress,
     lessonProgressMap,
     moduleProgress,
     completedLessons,
@@ -307,8 +293,8 @@ export default function ModuleDetail({ loaderData }: Route.ComponentProps) {
         )}
       </div>
 
-      {/* Progress bar for enrolled students */}
-      {enrolled && totalLessons > 0 && (
+      {/* Progress bar for students with an Enrollment */}
+      {showProgress && totalLessons > 0 && (
         <div className="mb-6">
           <div className="mb-1 flex items-center justify-between text-sm">
             <span className="text-muted-foreground">
@@ -362,7 +348,7 @@ export default function ModuleDetail({ loaderData }: Route.ComponentProps) {
 
             const content = (
               <div className="flex items-center gap-3 rounded-md px-3 py-3 text-sm">
-                {enrolled ? (
+                {canViewContent ? (
                   isCompleted ? (
                     <CheckCircle2 className="size-4 shrink-0 text-green-500" />
                   ) : isInProgress ? (
@@ -395,7 +381,7 @@ export default function ModuleDetail({ loaderData }: Route.ComponentProps) {
               </div>
             );
 
-            if (enrolled) {
+            if (canViewContent) {
               return (
                 <Link
                   key={lesson.id}
