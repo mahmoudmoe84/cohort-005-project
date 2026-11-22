@@ -2,7 +2,10 @@ import { useState, useEffect, useCallback } from "react";
 import { Link, useFetcher, useNavigate } from "react-router";
 import { toast } from "sonner";
 import type { Route } from "./+types/courses.$slug.lessons.$lessonId";
-import { getAccess, requireContentAccess } from "~/lib/access.server";
+import {
+  getCourseAccess,
+  requireContentAccess,
+} from "~/modules/course-access/index.server";
 import { renderComment } from "~/lib/comment-markdown.server";
 import { markdown, type Markdown } from "~/lib/text";
 import {
@@ -65,7 +68,7 @@ import { renderMarkdown } from "~/lib/markdown.server";
 import { YouTubePlayer } from "~/components/youtube-player";
 import { data, isRouteErrorResponse } from "react-router";
 import { z } from "zod";
-import { COUNTRIES } from "~/lib/ppp";
+import { countryName } from "~/lib/ppp";
 import { parseFormData, parseParams } from "~/lib/validation";
 
 const lessonParamsSchema = z.object({
@@ -668,9 +671,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     throw data("Lesson not found in this course", { status: 404 });
   }
 
-  const access = await getAccess(request, course.id);
+  const access = await getCourseAccess(request, course.id);
   const currentUserId = access.userId;
-  const enrolled = access.enrolled;
+  const enrolled = access.isEnrolled;
   // Progress is recorded only for a Student with an Enrollment who can view
   // the content. A PPP-blocked visit does not count as progress.
   const tracksProgress = enrolled && access.canViewContent;
@@ -710,10 +713,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     }
   }
 
-  // PPP Access Guard — resolved by getAccess, which treats a blocked user as
-  // having no access to the course's content at all.
-  const { pppBlocked, pppBlockedCountry, pppPurchaseCountry, canViewContent } =
-    access;
+  // A PPP block counts as no access to the course's content at all. The page
+  // reads blocked.reason to show the PPP notice.
+  const { blocked, canViewContent } = access;
 
   // Comments are confidential to the course: only people who can read the
   // lesson can read the discussion on it.
@@ -820,12 +822,10 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     lastWatchPosition,
     watchProgress,
     lessonProgressMap,
-    pppBlocked,
-    pppBlockedCountry,
-    pppPurchaseCountry,
+    blocked,
     comments,
     canViewContent,
-    canModerate: access.isStaff,
+    canModerate: access.isCourseManager,
     instructorName: instructor?.name ?? "your instructor",
     bookmarked,
     note: note ? { body: note.body, updatedAt: note.updatedAt } : null,
@@ -843,7 +843,7 @@ export async function action({ params, request }: Route.ActionArgs) {
   // Check content access once, before any intent runs, so that every intent
   // (and each new one) is protected. Loader guards don't protect actions.
   const access = await requireContentAccess(request, course.id);
-  const currentUserId = access.userId!;
+  const currentUserId = access.userId;
 
   const formData = await request.formData();
   const intent = formData.get("intent");
@@ -906,7 +906,7 @@ export async function action({ params, request }: Route.ActionArgs) {
         db,
         parsed.data.commentId,
         currentUserId,
-        access.isStaff,
+        access.isCourseManager,
         new Date(),
         await defaultNotifications()
       );
@@ -1024,9 +1024,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     lastWatchPosition,
     watchProgress,
     lessonProgressMap,
-    pppBlocked,
-    pppBlockedCountry,
-    pppPurchaseCountry,
+    blocked,
     comments,
     canViewContent,
     canModerate,
@@ -1058,15 +1056,9 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
   const quizResult = quizFetcher.data?.quizResult ?? null;
   const isSubmittingQuiz = quizFetcher.state !== "idle";
 
-  if (pppBlocked) {
-    const purchaseCountryName = pppPurchaseCountry
-      ? (COUNTRIES.find((c) => c.code === pppPurchaseCountry)?.name ??
-        pppPurchaseCountry)
-      : "your original country";
-    const currentCountryName = pppBlockedCountry
-      ? (COUNTRIES.find((c) => c.code === pppBlockedCountry)?.name ??
-        pppBlockedCountry)
-      : "a different country";
+  if (blocked?.reason === "ppp-country") {
+    const purchaseCountryName = countryName(blocked.purchaseCountry);
+    const currentCountryName = countryName(blocked.currentCountry);
 
     return (
       <div className="flex min-h-[60vh] items-center justify-center p-6">

@@ -1,7 +1,7 @@
 import { Link, isRouteErrorResponse, useSearchParams } from "react-router";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import type { Route } from "./+types/instructor.analytics";
-import { requireInstructorOrAdmin } from "~/lib/access.server";
+import { requireInstructor } from "~/modules/course-access/index.server";
 import {
   getInstructorAnalytics,
   type CourseCountryRevenue,
@@ -72,7 +72,7 @@ function parseId(value: string | null): number | null {
 }
 
 export async function loader({ request, url }: Route.LoaderArgs) {
-  const { userId, isAdmin } = await requireInstructorOrAdmin(request);
+  const { userId, isPlatformAdmin } = await requireInstructor(request);
 
   const range = parseAnalyticsRange(url.searchParams.get("range"));
   const tab: AnalyticsTab =
@@ -80,20 +80,20 @@ export async function loader({ request, url }: Route.LoaderArgs) {
 
   // Instructors are pinned to their own figures; only an admin may look
   // elsewhere, and null means "every instructor".
-  const instructorId = isAdmin
+  const instructorId = isPlatformAdmin
     ? parseId(url.searchParams.get("instructor"))
     : userId;
 
   return {
     tab,
     range,
-    isAdmin,
+    isPlatformAdmin,
     instructorId,
     ...getInstructorAnalytics({
       instructorId,
       range,
       courseId: parseId(url.searchParams.get("course")),
-      includeInstructors: isAdmin,
+      includeInstructors: isPlatformAdmin,
     }),
   };
 }
@@ -584,7 +584,7 @@ export default function InstructorAnalytics({
   const {
     tab,
     range,
-    isAdmin,
+    isPlatformAdmin,
     instructorId,
     selectedCourseId,
     summary,
@@ -631,14 +631,14 @@ export default function InstructorAnalytics({
         <div>
           <h1 className="text-3xl font-bold">Analytics</h1>
           <p className="mt-1 text-muted-foreground">
-            {isAdmin && instructorId === null
+            {isPlatformAdmin && instructorId === null
               ? "Revenue across every instructor on the platform."
               : "Revenue and earnings for your courses."}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          {isAdmin && (
+          {isPlatformAdmin && (
             <Select
               value={instructorId === null ? "all" : String(instructorId)}
               onValueChange={(value) =>
